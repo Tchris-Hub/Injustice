@@ -186,3 +186,89 @@ class EscalationResponse(BaseModel):
                 "estimated_response_time": "24-48 hours"
             }
         }
+
+
+# ---------------------------------------------
+# Public API Schemas (No Auth Required)
+# ---------------------------------------------
+class PublicChatRequest(BaseModel):
+    """Simple chat request for public/demo endpoint."""
+    message: str = Field(..., min_length=1, max_length=10000)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "message": "What are my rights as a tenant in Nigeria?"
+            }
+        }
+
+
+class PublicChatResponse(BaseModel):
+    """Simple chat response for public/demo endpoint."""
+    content: str
+    sources: List[str] = []
+    confidence_score: Optional[str] = None
+    legal_disclaimer: str = (
+        "⚠️ This information is for educational purposes only and does not constitute legal advice. "
+        "Please consult a licensed attorney for advice specific to your situation."
+    )
+
+
+class DocumentAnalysisRequest(BaseModel):
+    """Request to analyze a legal document for risky clauses."""
+    document_text: str = Field(..., min_length=10, max_length=50000)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "document_text": "TENANCY AGREEMENT: The tenant agrees to pay a penalty of 50% of rent for any late payment..."
+            }
+        }
+
+
+class DangerousClause(BaseModel):
+    """A dangerous clause found in a document."""
+    clause: str
+    risk_level: str  # "High", "Medium", "Low"
+    explanation: str
+    simplified_explanation: str
+    long_term_implications: str
+    pros: List[str] = []
+    cons: List[str] = []
+    recommendation: str
+
+
+class DocumentAnalysisResponse(BaseModel):
+    """Response from document analysis."""
+    risk_score: int = Field(..., ge=0, le=100)
+    verdict: str  # "Safe", "Caution", "Do Not Sign"
+    dangerous_clauses: List[DangerousClause] = []
+    summary: str
+    legal_disclaimer: str = (
+        "⚠️ This analysis is for informational purposes only. "
+        "Have a lawyer review any document before signing."
+    )
+
+
+class DocumentGenerationRequest(BaseModel):
+    """Request to generate a legal document template."""
+    doc_type: str = Field(..., min_length=1, max_length=100)
+    user_details: str = Field(..., min_length=10, max_length=5000)
+    
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "doc_type": "Demand Letter",
+                "user_details": "Landlord: John Doe. Tenant: Jane Smith. Amount: 500,000 Naira."
+            }
+        }
+
+
+class DocumentGenerationResponse(BaseModel):
+    """Response with generated document template."""
+    content: str
+    doc_type: str
+    warning: str = (
+        "⚠️ TEMPLATE ONLY: This is a general template and may not be suitable for your specific situation. "
+        "Have a qualified lawyer review and customize this document before using it."
+    )

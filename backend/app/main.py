@@ -18,6 +18,7 @@ from slowapi.errors import RateLimitExceeded
 from app.core.config import settings
 from app.db.session import init_db, close_db
 from app.api.v1.router import api_v1_router
+from app.services.rag_service import get_rag_service
 
 
 # ---------------------------------------------
@@ -56,6 +57,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Database initialization failed: {e}")
         # Continue anyway - DB might be pre-initialized
+    
+    # Initialize RAG Service (Warmup)
+    try:
+        logger.info("Warming up RAG Service (loading LLM & Embeddings)...")
+        get_rag_service()
+        logger.info("RAG Service warmup complete")
+    except Exception as e:
+        logger.error(f"RAG Service warmup failed: {e}")
+        # Non-critical for startup, but requests will be slow/fail later
     
     yield  # Application runs here
     

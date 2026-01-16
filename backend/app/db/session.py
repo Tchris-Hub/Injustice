@@ -15,13 +15,21 @@ from app.core.config import settings
 
 
 # Create async engine with connection pooling
-engine = create_async_engine(
-    settings.database_url,
-    echo=settings.debug,  # Log SQL queries in debug mode
-    pool_pre_ping=True,   # Verify connections before use
-    pool_size=10,
-    max_overflow=20
-)
+# SQLite doesn't support pool_size/max_overflow, so we conditionally set them
+_is_sqlite = settings.database_url.startswith("sqlite")
+
+engine_kwargs = {
+    "echo": settings.debug,  # Log SQL queries in debug mode
+}
+
+if not _is_sqlite:
+    engine_kwargs.update({
+        "pool_pre_ping": True,
+        "pool_size": 10,
+        "max_overflow": 20
+    })
+
+engine = create_async_engine(settings.database_url, **engine_kwargs)
 
 # Session factory
 async_session = async_sessionmaker(

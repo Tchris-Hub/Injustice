@@ -16,6 +16,30 @@ class Settings(BaseSettings):
     Use .env file for local development.
     """
     
+    # OpenRouter Configuration
+    OPENROUTER_API_KEY: str = ""
+    OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
+    
+    # Model Configuration
+    # Nemotron 3 Nano is the target for this update.
+    MODEL_NAME: str = "nvidia/nemotron-3-nano-30b-a3b:free"
+    MODEL_CHAT: str = ""
+    MODEL_ANALYSIS: str = ""
+    MODEL_GENERATION: str = ""
+
+    @property
+    def MODEL_DEFAULT(self) -> str:
+        return self.MODEL_NAME
+
+    @property
+    def MODEL_CONFIG(self) -> dict:
+        return {
+            "default": self.MODEL_NAME,
+            "chat": self.MODEL_CHAT or self.MODEL_NAME,
+            "analysis": self.MODEL_ANALYSIS or self.MODEL_NAME,
+            "generation": self.MODEL_GENERATION or self.MODEL_NAME,
+        }
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",
@@ -29,8 +53,8 @@ class Settings(BaseSettings):
     environment: str = "development"
     debug: bool = True
     
-    # Database
-    database_url: str = "postgresql+asyncpg://user:password@localhost:5432/injustice_db"
+    # Database (SQLite for local dev, PostgreSQL for production)
+    database_url: str = "sqlite+aiosqlite:///./data/injustice.db"
     
     # Authentication
     secret_key: str = "change-me-in-production"
@@ -51,7 +75,8 @@ class Settings(BaseSettings):
     rate_limit_per_minute: int = 30
     
     # CORS
-    allowed_origins: str = "http://localhost:3000,http://localhost:8081"
+    # In development, we allow all for mobile testing. In prod, lock this down.
+    allowed_origins: str = "*"
     
     # Legal Safety
     jurisdiction: str = "Nigeria"

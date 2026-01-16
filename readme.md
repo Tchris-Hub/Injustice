@@ -46,3 +46,16 @@
    ```bash
    uvicorn app.main:app --reload
    ```
+
+---
+
+## ⚠️ Legal Notice
+
+**This software is for educational purposes only.**
+
+The "Injustice" AI Legal Advisor is **NOT** a lawyer and does not provide legal advice. It is an AI system designed to provide information based on the Nigerian Constitution.
+- **Do not rely on this tool for critical legal decisions.**
+- **Always consult with a qualified attorney.**
+- **Use at your own risk.**
+
+See [LEGAL_DISCLAIMER.md](LEGAL_DISCLAIMER.md) for full details.

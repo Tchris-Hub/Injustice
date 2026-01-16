@@ -7,12 +7,15 @@ Handles conversations, messages, and escalations.
 
 import logging
 import uuid
+import tempfile
+import os
 from datetime import datetime, timezone
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
+import openai
 
 from app.db.session import get_db
 from app.db.models import User, Conversation, Message
@@ -25,7 +28,14 @@ from app.schemas.chat import (
     ConversationList,
     EscalationRequest,
     EscalationResponse,
-    SourceCitation
+    SourceCitation,
+    PublicChatRequest,
+    PublicChatResponse,
+    DocumentAnalysisRequest,
+    DocumentAnalysisResponse,
+    DangerousClause,
+    DocumentGenerationRequest,
+    DocumentGenerationResponse
 )
 from app.api.deps import get_current_user
 from app.services.rag_service import get_rag_service
@@ -484,3 +494,249 @@ async def chat_health():
             "rag_service": "error",
             "error": str(e)
         }
+
+
+# ==============================================
+# PUBLIC ENDPOINTS (No Authentication Required)
+# ==============================================
+# These endpoints are for demo/public use without login
+
+@router.post(
+    "/public/message",
+    response_model=PublicChatResponse,
+    summary="Send a message (public/demo)",
+    description="Public endpoint for chat - no authentication required."
+)
+async def send_message_public(
+    data: PublicChatRequest
+):
+    """
+    Send a message to the AI Legal Advisor.
+    This is a simplified public endpoint for demo purposes.
+    """
+    try:
+        # Zero-Trace Scrubbing: Explicitly avoid logging any user-identifying info
+        rag_service = get_rag_service()
+        
+        # Generate AI response with empty history and no metadata tracking
+        ai_result = rag_service.generate_response(
+            user_message=data.message,
+            conversation_history=[]
+        )
+        
+        # Extract source titles as simple strings
+        sources = []
+        for source in ai_result.get("sources", []):
+            if isinstance(source, dict):
+                title = source.get("title", "")
+                section = source.get("section", "")
+                if section:
+                    sources.append(f"{title} - {section}")
+                else:
+                    sources.append(title)
+            else:
+                sources.append(str(source))
+        
+        return PublicChatResponse(
+            content=ai_result.get("content", "I apologize, but I couldn't generate a response."),
+            sources=sources,
+            confidence_score=str(ai_result.get("confidence_score", "low"))
+        )
+    except Exception as e:
+        import traceback
+        error_type = type(e).__name__
+        error_msg = str(e)
+        full_traceback = traceback.format_exc()
+        
+        logger.error(f"Public chat error [{error_type}]: {error_msg}")
+        logger.error(f"Full traceback:\n{full_traceback}")
+        
+        # Return detailed error in development mode
+        from app.core.config import settings
+        if settings.debug:
+            error_detail = f"[DEBUG ERROR]\nType: {error_type}\nMessage: {error_msg}\n\nCheck server logs for full traceback."
+        else:
+            error_detail = "I apologize, but I encountered an error processing your request. Please try again."
+        
+        return PublicChatResponse(
+            content=error_detail,
+            sources=[],
+            confidence_score=0.0
+        )
+
+
+@router.post(
+    "/analyze-document",
+    response_model=DocumentAnalysisResponse,
+    summary="Analyze a document for risky clauses",
+    description="Public endpoint to review contracts and find dangerous clauses."
+)
+async def analyze_document_public(
+    data: DocumentAnalysisRequest
+):
+    """
+    Analyze a legal document (contract, agreement) for risky clauses.
+    Returns risk assessment with explanations and recommendations.
+    """
+    try:
+        # Zero-Trace Scrubbing: Stateless analysis
+        rag_service = get_rag_service()
+        
+        # Use RAG service to analyze document without tracking source/user
+        analysis = rag_service.analyze_document(data.document_text)
+        
+        # Parse the analysis result
+        dangerous_clauses = []
+        raw_clauses = analysis.get("dangerous_clauses", [])
+        
+        for clause in raw_clauses:
+            if isinstance(clause, dict):
+                # Map keys from LLM response (which might use clause_text/category) to schema keys
+                dangerous_clauses.append(DangerousClause(
+                    clause=clause.get("clause_text") or clause.get("clause") or "Unknown clause",
+                    risk_level=clause.get("category") or clause.get("risk_level") or "Medium",
+                    explanation=clause.get("explanation") or clause.get("why_bad") or "Could be unfavorable",
+                    simplified_explanation=clause.get("simplified_explanation") or "No simplified breakdown provided.",
+                    long_term_implications=clause.get("long_term_implications") or "No long-term implications identified.",
+                    pros=clause.get("pros") if isinstance(clause.get("pros"), list) else [],
+                    cons=clause.get("cons") if isinstance(clause.get("cons"), list) else [],
+                    recommendation=clause.get("recommendation") or "Consult a lawyer"
+                ))
+        
+        # Calculate risk score (1-10 scale to 0-100 scale)
+        raw_score = analysis.get("risk_score", 5)
+        try:
+            risk_score = min(100, max(0, int(float(raw_score) * 10)))
+        except (ValueError, TypeError):
+            # If AI returned a string like "Low", map to a default number
+            risk_mapping = {"low": 20, "medium": 50, "high": 80}
+            risk_score = risk_mapping.get(str(raw_score).lower(), 50)
+        
+        # Determine verdict
+        if risk_score <= 30:
+            verdict = "Safe"
+        elif risk_score <= 60:
+            verdict = "Caution"
+        else:
+            verdict = "Do Not Sign"
+        
+        return DocumentAnalysisResponse(
+            risk_score=risk_score,
+            verdict=verdict,
+            dangerous_clauses=dangerous_clauses,
+            summary=analysis.get("summary", "Document analyzed.")
+        )
+    except Exception as e:
+        logger.error(f"Document analysis error: {e}", exc_info=True)
+        return DocumentAnalysisResponse(
+            risk_score=50,
+            verdict="Caution",
+            dangerous_clauses=[],
+            summary="Unable to fully analyze the document. Please try again or consult a lawyer."
+        )
+
+
+@router.post(
+    "/generate-document",
+    response_model=DocumentGenerationResponse,
+    summary="Generate a legal document template",
+    description="Public endpoint to create legal document templates."
+)
+async def generate_document_public(
+    data: DocumentGenerationRequest
+):
+    """
+    Generate a legal document template based on the type and user details.
+    Returns a template that should be reviewed by a lawyer before use.
+    """
+    try:
+        # Zero-Trace Scrubbing: Stateless generation
+        rag_service = get_rag_service()
+        
+        # Use RAG service to generate document without persistent indexing
+        document_content = rag_service.generate_document(
+            doc_type=data.doc_type,
+            user_details=data.user_details
+        )
+        
+        return DocumentGenerationResponse(
+            content=document_content,
+            doc_type=data.doc_type
+        )
+    except Exception as e:
+        logger.error(f"Document generation error: {e}", exc_info=True)
+        return DocumentGenerationResponse(
+            content=f"Unable to generate {data.doc_type}. Please try again with more details.",
+            doc_type=data.doc_type,
+            warning="⚠️ Error occurred during generation. Please try again."
+        )
+
+
+# ---------------------------------------------
+# Speech-to-Text Transcription (Whisper)
+# ---------------------------------------------
+@router.post("/public/transcribe")
+async def transcribe_audio_public(
+    audio: UploadFile = File(...)
+):
+    """
+    Transcribe audio to text using OpenAI Whisper.
+    Supports: mp3, mp4, mpeg, mpga, m4a, wav, webm
+    
+    Returns the transcribed text for use in chat input.
+    """
+    # Validate file type
+    allowed_types = ["audio/mpeg", "audio/mp4", "audio/wav", "audio/webm", "audio/m4a", "audio/x-m4a"]
+    content_type = audio.content_type or ""
+    
+    # Also check by extension for flexibility
+    filename = audio.filename or ""
+    allowed_extensions = [".mp3", ".mp4", ".m4a", ".wav", ".webm", ".mpeg", ".mpga"]
+    has_valid_ext = any(filename.lower().endswith(ext) for ext in allowed_extensions)
+    
+    if content_type not in allowed_types and not has_valid_ext:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid audio format. Supported: mp3, mp4, m4a, wav, webm"
+        )
+    
+    try:
+        # Save to temporary file (Whisper API requires a file)
+        suffix = os.path.splitext(filename)[1] if filename else ".m4a"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            content = await audio.read()
+            tmp.write(content)
+            tmp_path = tmp.name
+        
+        try:
+            # Use OpenAI Whisper API
+            client = openai.OpenAI()
+            with open(tmp_path, "rb") as audio_file:
+                transcript = client.audio.transcriptions.create(
+                    model="whisper-1",
+                    file=audio_file,
+                    language="en"  # Can be made dynamic
+                )
+            
+            return {
+                "success": True,
+                "text": transcript.text,
+                "language": "en"
+            }
+        finally:
+            # Clean up temp file
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+                
+    except openai.APIError as e:
+        logger.error(f"OpenAI Whisper API error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Speech recognition service temporarily unavailable."
+        )
+    except Exception as e:
+        logger.error(f"Transcription error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to transcribe audio. Please try again."
+        )

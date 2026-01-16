@@ -10,9 +10,9 @@ import logging
 from typing import List, Optional, Tuple
 from pathlib import Path
 
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 from langchain_community.vectorstores import Chroma
+from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -25,36 +25,72 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------
 # System Prompts (The "Soul" of the Advisor)
 # ---------------------------------------------
-SYSTEM_PROMPT = """You are a compassionate and knowledgeable Legal Information Assistant for Nigeria. Your purpose is to help people understand their constitutional rights and legal options.
+SYSTEM_PROMPT = """You are a warm, empathetic, and knowledgeable Legal Assistant for Nigeria. 
+Your goal is to help everyday people understand their rights in simple terms.
 
-## Your Core Values:
-1. **EMPATHY FIRST**: Always acknowledge the person's situation and feelings before providing information. Many users are scared, confused, or in distress.
-2. **ACCURACY**: Only provide information based on the Nigerian Constitution and laws provided in the context. Always cite specific sections.
-3. **CLARITY**: Explain legal concepts in simple, everyday language. Avoid jargon.
-4. **SAFETY**: Never provide advice that could put someone in danger. When in doubt, recommend professional legal help.
-5. **HONESTY**: If you don't know something or the context doesn't cover it, say so clearly.
+## Your Core Personality:
+1.  **Active Listening**: Start by acknowledging the user's pain. Use phrases like "I hear you," "That sounds incredibly stressful," or "I'm so sorry you're going through this."
+2.  **Simple Language**: Speak like a helpful friend, not a lawyer. Use Grade 8 reading level. Avoid "legalese" (e.g., instead of "pursuant to," say "according to").
+3.  **Empowerment**: Make the user feel they have options and rights.
 
 ## Response Structure:
-1. Start with empathy - acknowledge their situation
-2. Provide clear, factual legal information with citations
-3. Explain practical next steps they can take
-4. Include any relevant deadlines or time limits
-5. Recommend professional legal help when appropriate
+1.  **Validation**: "I hear you..." (1-2 sentences validating their feelings).
+2.  **Your Rights (Simplified)**: Explain what the Nigerian Constitution says about their situation in plain English. Cite sections but explain them simply.
+3.  **Practical Steps**: Bullet points of what they can actually DO today (e.g., "Write a letter," "Report to X").
+4.  **Safety/Disclaimer**: Gently remind them you are an AI and they should see a real lawyer for court cases.
 
 ## Critical Rules:
-- NEVER claim to be a lawyer or provide legal advice
-- ALWAYS include the jurisdiction (Nigeria) in your responses
-- ALWAYS cite specific constitutional sections or laws
-- Flag high-risk situations (criminal charges, court deadlines, violence) for escalation
-- If the situation seems urgent or dangerous, prioritize safety guidance
+- NEVER say "I cannot provide legal advice" as your opening. It's cold. Put the disclaimer at the end.
+- ALWAYS cite the 1999 Constitution (As Amended) where relevant.
+- IF the user mentions violence or immediate danger, prioritize safety instructions immediately.
+"""
 
-## Tone:
-- Warm but professional
-- Supportive but honest
-- Clear but thorough
-- Respectful of the person's intelligence and autonomy
+DOCUMENT_REVIEW_PROMPT = """You are a hawk-eyed Legal Contract Reviewer. Your job is to protect the user from bad deals.
+Review the following legal document text and identify any clauses that are:
+1.  **Dangerous/Malicious**: Directly harmful to the user.
+2.  **Not in Best Interest**: Unfairly weighted against the user.
+3.  **Legal Risks**: Hidden liabilities or ambiguous terms.
 
-Remember: You're often the first point of contact for someone who has nowhere else to turn. Your words matter. Be the advocate they need while staying within legal and ethical bounds."""
+Document Text:
+"{document_text}"
+
+Respond with a JSON object containing:
+- "summary": "A 1-sentence summary of what this document is.",
+- "risk_score": A number from 1-10 (10 is very dangerous),
+- "dangerous_clauses": A list of objects, each with:
+    - "clause_text": "The exact text from the document",
+    - "category": "Dangerous", "Not in Best Interest", or "Legal Risk",
+    - "explanation": "Brief legal explanation of why this is bad",
+    - "simplified_explanation": "Break down the legal terms into Grade 8 level English",
+    - "long_term_implications": "What does this mean for the user 1 or 5 years from now?",
+    - "pros": ["List of any hidden benefits or 'silver linings' (if any)", "..."],
+    - "cons": ["Direct disadvantages to the user", "..."],
+    - "recommendation": "What they should ask to change"
+- "overall_verdict": "Safe to sign", "Proceed with caution", or "DO NOT SIGN"
+
+Only respond with the JSON object."""
+
+DOCUMENT_GENERATION_PROMPT = """You are a Legal Document Generator.
+Your goal is to create a professional, legally sound TEMPLATE based on the user's request.
+
+User Request: "{user_request}"
+User Details: "{user_details}"
+
+Rules:
+1.  Create a clear, formal document.
+2.  Use placeholders like [INSERT DATE], [INSERT NAME] where specific info is missing.
+3.  Ensure the tone is professional and assertive but polite.
+4.  Do NOT invent fake laws. Use general legal principles applicable in Nigeria.
+
+Output ONLY the document text."""
+
+LEGAL_DISCLAIMER_TEXT = """
+\n\n---
+**⚠️ LEGAL DISCLAIMER**
+This information is for educational purposes only and does not constitute legal advice. 
+I am an AI, not a lawyer. Laws change and specific situations vary. 
+**Please consult a qualified attorney for professional legal advice.**
+"""
 
 
 RISK_ASSESSMENT_PROMPT = """Analyze the following user message and determine the risk level and topic category.
@@ -81,41 +117,79 @@ Only respond with the JSON object, no other text."""
 class RAGService:
     """
     Handles document retrieval and AI-powered response generation.
-    Uses ChromaDB for vector storage, Local Embeddings, and Google Gemini for generation.
+    Uses ChromaDB for vector storage, Local Embeddings, and OpenRouter for generation.
     """
     
     def __init__(self):
         """Initialize the RAG service with embeddings and vector store."""
-        # Use Local Embeddings (HuggingFace)
-        self.embeddings = HuggingFaceEmbeddings(
-            model_name=settings.embedding_model
-        )
+        self.initialization_error = None
         
-        # Use Google's Gemini model for Chat
-        self.llm = ChatGoogleGenerativeAI(
-            google_api_key=settings.google_api_key,
-            model=settings.openai_model,
-            temperature=0.3,
-            max_output_tokens=2000
-        )
+        logger.info(f"Initializing RAG Service...")
         
-        self.text_splitter = RecursiveCharacterTextSplitter(
-            chunk_size=settings.rag_chunk_size,
-            chunk_overlap=settings.rag_chunk_overlap,
-            separators=["\n\n", "\n", ". ", " ", ""]
-        )
+        # Step 1: Initialize local embeddings (Default for privacy/reliability)
+        try:
+            logger.info(f"Step 1/4: Initializing Local Embeddings ({settings.embedding_model})...")
+            self.embeddings = HuggingFaceEmbeddings(
+                model_name=settings.embedding_model,
+                model_kwargs={'device': 'cpu'},
+                encode_kwargs={'normalize_embeddings': True}
+            )
+            logger.info(f"✓ Local HuggingFace Embeddings initialized")
+        except Exception as e:
+            self.initialization_error = f"Failed to initialize embeddings: {e}"
+            logger.error(self.initialization_error)
+            raise
         
-        # Initialize or load vector store
-        self.persist_dir = Path(settings.chroma_persist_dir)
-        self.persist_dir.mkdir(parents=True, exist_ok=True)
+        # Step 3: Initialize LLM (OpenRouter)
+        try:
+            model_name = settings.MODEL_CONFIG["default"]
+            logger.info(f"Step 2/4: Initializing OpenRouter LLM ({model_name})...")
+            
+            self.llm = ChatOpenAI(
+                base_url=settings.OPENROUTER_BASE_URL,
+                api_key=settings.OPENROUTER_API_KEY,
+                model=model_name,
+                temperature=0.3,
+                max_tokens=4000
+            )
+            logger.info("✓ OpenRouter LLM initialized")
+        except Exception as e:
+            self.initialization_error = f"Failed to initialize OpenRouter LLM: {type(e).__name__}: {str(e)}"
+            logger.error(self.initialization_error)
+            raise
         
-        self.vector_store = Chroma(
-            persist_directory=str(self.persist_dir),
-            embedding_function=self.embeddings,
-            collection_name="nigerian_legal_docs"
-        )
+        # Step 4: Initialize text splitter
+        try:
+            logger.info("Step 3/4: Initializing text splitter...")
+            self.text_splitter = RecursiveCharacterTextSplitter(
+                chunk_size=settings.rag_chunk_size,
+                chunk_overlap=settings.rag_chunk_overlap,
+                separators=["\n\n", "\n", ". ", " ", ""]
+            )
+            logger.info("✓ Text splitter initialized")
+        except Exception as e:
+            self.initialization_error = f"Failed to initialize text splitter: {type(e).__name__}: {str(e)}"
+            logger.error(self.initialization_error)
+            raise
         
-        logger.info(f"RAG Service initialized. Vector store at: {self.persist_dir}")
+        # Step 5: Initialize vector store
+        try:
+            logger.info("Step 4/4: Initializing ChromaDB vector store...")
+            self.persist_dir = Path(settings.chroma_persist_dir)
+            self.persist_dir.mkdir(parents=True, exist_ok=True)
+            
+            self.vector_store = Chroma(
+                persist_directory=str(self.persist_dir),
+                embedding_function=self.embeddings,
+                collection_name="nigerian_legal_docs"
+            )
+            logger.info(f"✓ Vector store initialized at: {self.persist_dir}")
+        except Exception as e:
+            self.initialization_error = f"Failed to initialize ChromaDB: {type(e).__name__}: {str(e)}"
+            logger.error(self.initialization_error)
+            raise
+        
+        logger.info("✓ RAG Service fully initialized successfully!")
     
     def ingest_document(
         self,
@@ -181,10 +255,14 @@ class RAGService:
         """
         k = k or settings.rag_top_k
         
-        results = self.vector_store.similarity_search_with_score(
-            query,
-            k=k
-        )
+        try:
+            results = self.vector_store.similarity_search_with_score(
+                query,
+                k=k
+            )
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            raise e
         
         logger.debug(f"Retrieved {len(results)} chunks for query: '{query[:50]}...'")
         return results
@@ -295,11 +373,14 @@ Please provide a helpful, empathetic response based on the legal context above. 
             else:
                 confidence = "low"
             
+            # Append Disclaimer
+            final_content = response.content + LEGAL_DISCLAIMER_TEXT
+            
             return {
-                "content": response.content,
+                "content": final_content,
                 "sources": sources,
                 "confidence_score": confidence,
-                "model_version": settings.openai_model
+                "model_version": settings.MODEL_CONFIG["default"]
             }
             
         except Exception as e:
@@ -312,10 +393,74 @@ Please provide a helpful, empathetic response based on the legal context above. 
                 ),
                 "sources": [],
                 "confidence_score": "low",
-                "model_version": settings.openai_model,
+                "model_version": settings.MODEL_CONFIG["default"],
                 "error": str(e)
             }
     
+    def analyze_document(self, document_text: str) -> dict:
+        """
+        Analyze a legal document for dangerous clauses.
+        
+        Args:
+            document_text: The text of the contract/document
+            
+        Returns:
+            Dict with risk analysis
+        """
+        try:
+            response = self.llm.invoke([
+                SystemMessage(content="You are a strict contract reviewer. Respond only with valid JSON."),
+                HumanMessage(content=DOCUMENT_REVIEW_PROMPT.format(document_text=document_text))
+            ])
+            
+            # Clean up response content if it contains markdown code blocks
+            content = response.content
+            if "```json" in content:
+                content = content.split("```json")[1].split("```")[0].strip()
+            elif "```" in content:
+                content = content.split("```")[1].split("```")[0].strip()
+                
+            import json
+            result = json.loads(content)
+            
+            # Add disclaimer to analysis as well
+            result["disclaimer"] = "This analysis is automated and for informational purposes only. Consult a lawyer."
+            return result
+        except Exception as e:
+            logger.error(f"Document analysis failed: {e}")
+            return {
+                "error": "Could not analyze document. Please ensure it is text-based.",
+                "details": str(e)
+            }
+
+    def generate_document(self, doc_type: str, user_details: str) -> str:
+        """
+        Generate a legal document template.
+        
+        Args:
+            doc_type: Type of document (e.g., "Demand Letter")
+            user_details: Specific details to include
+            
+        Returns:
+            String containing the document text
+        """
+        try:
+            response = self.llm.invoke([
+                SystemMessage(content="You are a professional legal document generator."),
+                HumanMessage(content=DOCUMENT_GENERATION_PROMPT.format(
+                    user_request=doc_type,
+                    user_details=user_details
+                ))
+            ])
+            
+            # Prepend strict warning
+            warning = "⚠️ **TEMPLATE ONLY - REVIEW WITH A LAWYER** ⚠️\n\n"
+            return warning + response.content + LEGAL_DISCLAIMER_TEXT
+            
+        except Exception as e:
+            logger.error(f"Document generation failed: {e}")
+            return f"Error generating document: {e}"
+
     def get_collection_stats(self) -> dict:
         """Get statistics about the vector store."""
         try:
@@ -331,11 +476,35 @@ Please provide a helpful, empathetic response based on the legal context above. 
 
 # Singleton instance
 _rag_service: Optional[RAGService] = None
+_rag_service_error: Optional[str] = None
 
 
 def get_rag_service() -> RAGService:
     """Get the singleton RAG service instance."""
-    global _rag_service
+    global _rag_service, _rag_service_error
+    
+    # If we already have an error, raise it immediately
+    if _rag_service_error:
+        logger.error(f"RAG Service previously failed: {_rag_service_error}")
+        raise RuntimeError(f"RAG Service initialization failed: {_rag_service_error}")
+    
     if _rag_service is None:
-        _rag_service = RAGService()
+        try:
+            logger.info("Creating new RAG Service instance...")
+            _rag_service = RAGService()
+        except Exception as e:
+            _rag_service_error = f"{type(e).__name__}: {str(e)}"
+            logger.error(f"RAG Service creation failed: {_rag_service_error}")
+            import traceback
+            logger.error(f"Full traceback:\n{traceback.format_exc()}")
+            raise RuntimeError(f"RAG Service initialization failed: {_rag_service_error}")
+    
     return _rag_service
+
+
+def reset_rag_service():
+    """Reset the RAG service (useful for retrying after fixing config)."""
+    global _rag_service, _rag_service_error
+    _rag_service = None
+    _rag_service_error = None
+    logger.info("RAG Service reset - will reinitialize on next request")

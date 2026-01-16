@@ -16,9 +16,10 @@ from sqlalchemy import (
     Index,
     String,
     Text,
+    JSON,
     Enum as SQLEnum
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
@@ -287,7 +288,7 @@ class Message(Base):
     
     # AI response metadata (for provenance & auditing)
     sources: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+        JSON,
         nullable=True
     )  # Citations: [{"title": "...", "section": "...", "excerpt": "..."}]
     model_version: Mapped[Optional[str]] = mapped_column(
@@ -385,8 +386,8 @@ class LegalDocument(Base):
     )
     
     # Metadata
-    metadata: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+    document_metadata: Mapped[Optional[dict]] = mapped_column(
+        JSON,
         nullable=True
     )  # Additional info like publication date, version, etc.
     
@@ -453,7 +454,7 @@ class AuditLog(Base):
     
     # Details
     details: Mapped[Optional[dict]] = mapped_column(
-        JSONB,
+        JSON,
         nullable=True
     )
     
