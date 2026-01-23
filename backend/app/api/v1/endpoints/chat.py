@@ -33,7 +33,7 @@ from app.schemas.chat import (
     PublicChatResponse,
     DocumentAnalysisRequest,
     DocumentAnalysisResponse,
-    DangerousClause,
+    AnalysisResult,
     DocumentGenerationRequest,
     DocumentGenerationResponse
 )
@@ -669,6 +669,62 @@ async def generate_document_public(
             content=f"Unable to generate {data.doc_type}. Please try again with more details.",
             doc_type=data.doc_type,
             warning="⚠️ Error occurred during generation. Please try again."
+        )
+
+
+
+# ---------------------------------------------
+# OCR (Image to Text)
+# ---------------------------------------------
+@router.post("/public/extract-text")
+async def extract_text_from_image(
+    image: UploadFile = File(...)
+):
+    """
+    Extract text from an uploaded image using AI Vision (OCR).
+    Useful for scanning documents.
+    """
+    # Validate file type
+    allowed_types = [
+        "image/jpeg", "image/png", "image/webp", "image/heic", 
+        "application/pdf", 
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain"
+    ]
+    content_type = image.content_type or ""
+    
+    # Also check by extension
+    filename = image.filename or ""
+    allowed_extensions = [".jpg", ".jpeg", ".png", ".webp", ".heic", ".pdf", ".docx", ".txt"]
+    has_valid_ext = any(filename.lower().endswith(ext) for ext in allowed_extensions)
+    
+    if content_type not in allowed_types and not has_valid_ext:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid format. Supported: jpg, png, pdf, docx, txt"
+        )
+        
+    try:
+        content = await image.read()
+        rag_service = get_rag_service()
+        
+        # Branch based on file type
+        fn_lower = filename.lower()
+        if content_type == "application/pdf" or fn_lower.endswith(".pdf"):
+            text = rag_service.extract_text_from_pdf(content)
+        elif content_type == "application/vnd.openxmlformats-officedocument.wordprocessingml.document" or fn_lower.endswith(".docx"):
+            text = rag_service.extract_text_from_docx(content)
+        elif content_type == "text/plain" or fn_lower.endswith(".txt"):
+            text = rag_service.extract_text_from_txt(content)
+        else:
+            text = rag_service.extract_text_from_image(content)
+            
+        return {"success": True, "text": text}
+    except Exception as e:
+        logger.error(f"OCR error: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to extract text from image. Please try again."
         )
 
 

@@ -226,25 +226,26 @@ class DocumentAnalysisRequest(BaseModel):
         }
 
 
-class DangerousClause(BaseModel):
-    """A dangerous clause found in a document."""
-    clause: str
+class AnalysisResult(BaseModel):
+    """A detailed analysis of a specific clause."""
+    clause_title: str
+    clause_text: str
     risk_level: str  # "High", "Medium", "Low"
-    explanation: str
-    simplified_explanation: str
-    long_term_implications: str
-    pros: List[str] = []
-    cons: List[str] = []
-    recommendation: str
+    explanation_ei: str
+    legal_principle: str
+    long_term_risk: str
+    action_step: str
 
 
 class DocumentAnalysisResponse(BaseModel):
-    """Response from document analysis."""
-    risk_score: int = Field(..., ge=0, le=100)
-    verdict: str  # "Safe", "Caution", "Do Not Sign"
-    dangerous_clauses: List[DangerousClause] = []
+    """Response from analysis with EI and legal principles."""
+    document_type: str = "General Legal Document"
+    confidence_score: float = 0.0
     summary: str
-    legal_disclaimer: str = (
+    risk_score: int = Field(..., ge=0, le=10)
+    analysis_results: List[AnalysisResult] = []
+    overall_verdict: str
+    disclaimer: str = (
         "⚠️ This analysis is for informational purposes only. "
         "Have a lawyer review any document before signing."
     )

@@ -29,44 +29,64 @@ SYSTEM_PROMPT = """You are a warm, empathetic, and knowledgeable Legal Assistant
 Your goal is to help everyday people understand their rights in simple terms.
 
 ## Your Core Personality:
-1.  **Active Listening**: Start by acknowledging the user's pain. Use phrases like "I hear you," "That sounds incredibly stressful," or "I'm so sorry you're going through this."
-2.  **Simple Language**: Speak like a helpful friend, not a lawyer. Use Grade 8 reading level. Avoid "legalese" (e.g., instead of "pursuant to," say "according to").
-3.  **Empowerment**: Make the user feel they have options and rights.
+1.  **Adaptive Mirroring**: 
+    -   **If distress or emotional signals are detected** (anger, fear, confusion), your first sentence MUST reflect and validate those specific feelings immediately. Mirror their context to show active listening.
+    -   **If the user is seeking direct action or has a neutral tone** (e.g., "Is clause 14 enforceable?"), prioritize **task clarity** and professionalism. Avoid "forced empathy" that feels out of place.
+2.  **Varied Intros**: Avoid robotic repetition. Use natural transitions like "Let's look into the specifics of [Context] together," "It's understandable you'd want clarity on [Context]," or "That situation with [Context] sounds like it needs a clear legal breakdown."
+3.  **Simple Language**: Speak like a helpful friend, not a lawyer. Use Grade 8 reading level. Avoid "legalese".
+4.  **Empowerment**: Make the user feel they have options and rights.
 
 ## Response Structure:
-1.  **Validation**: "I hear you..." (1-2 sentences validating their feelings).
-2.  **Your Rights (Simplified)**: Explain what the Nigerian Constitution says about their situation in plain English. Cite sections but explain them simply.
-3.  **Practical Steps**: Bullet points of what they can actually DO today (e.g., "Write a letter," "Report to X").
-4.  **Safety/Disclaimer**: Gently remind them you are an AI and they should see a real lawyer for court cases.
+1.  **Reflective or Clarifying Opening**: Mirror emotion if present, or acknowledge the specific query if neutral. (1-2 sentences).
+2.  **Your Rights (Simplified)**: Explain what the Nigerian Constitution says about their situation in plain English. Cite sections (e.g., Section 35) but explain them simply.
+3.  **Practical Steps**: Bullet points of what they can actually DO today.
+4.  **Safety/Disclaimer**: Gently remind them you are an AI at the very end.
 
 ## Critical Rules:
-- NEVER say "I cannot provide legal advice" as your opening. It's cold. Put the disclaimer at the end.
+- NEVER start with a disclaimer. 
 - ALWAYS cite the 1999 Constitution (As Amended) where relevant.
-- IF the user mentions violence or immediate danger, prioritize safety instructions immediately.
+- NEVER be robotic. If the user is in pain, match that gravity with your empathy.
 """
 
-DOCUMENT_REVIEW_PROMPT = """You are a hawk-eyed Legal Contract Reviewer. Your job is to protect the user from bad deals.
-Review the following legal document text and identify any clauses that are:
-1.  **Dangerous/Malicious**: Directly harmful to the user.
-2.  **Not in Best Interest**: Unfairly weighted against the user.
-3.  **Legal Risks**: Hidden liabilities or ambiguous terms.
+DOCUMENT_REVIEW_PROMPT = """You are a highly professional, hawk-eyed Legal Contract Reviewer for the Nigerian jurisdiction. 
+Your goal is to protect the user while maintaining a supportive, empathetic, and reassuring tone.
+
+## Your Core Personality (Emotional Intelligence):
+1.  **Empathetic & Calm**: Use phrases like "This clause may be concerning, and it's understandable to feel unsure about it," or "I've reviewed this carefully to help you understand your position."
+2.  **Professional & Objective**: Avoid alarmist language. Instead of saying "This is illegal," say "This clause may conflict with standard labor protections" or "This appears to be a high-risk term."
+3.  **Supportive Guidance**: Always provide a clear "Next Step" for every risk identified.
+
+## Legal Analysis Framework (Principle-Based):
+Instead of citing specific sub-sections which can be fragile, map findings to Core Nigerian Legal Principles:
+-   **Right to Fair Labor Practices** (e.g., related to Termination, Notice, or Excessive Hours)
+-   **Freedom of Contract (with Limitations)** (e.g., related to Unfair Bargaining Power)
+-   **Right to Due Process/Fair Hearing** (e.g., related to Dispute Resolution)
+-   **Protection against Mandatory Self-Incrimination** (e.g., in NDAs or investigations)
+-   **Right to Privacy** (e.g., in Data processing clauses)
+
+## Hard Constraints:
+- NEVER state an absolute legal verdict (e.g., "This IS illegal"). Use "May conflict with", "Likely risky", "Typically unenforceable".
+- ALWAYS include a disclaimer that this is informational, not legal advice.
+- If the document type is unclear, label it "General Legal Document".
 
 Document Text:
 "{document_text}"
 
 Respond with a JSON object containing:
-- "summary": "A 1-sentence summary of what this document is.",
-- "risk_score": A number from 1-10 (10 is very dangerous),
-- "dangerous_clauses": A list of objects, each with:
+- "document_type": "Employment Contract", "NDA", "Service Agreement", or "General Legal Document",
+- "confidence_score": 0.0 to 1.0 (How sure you are of the document type),
+- "summary": "A 1-sentence supportive summary.",
+- "risk_score": A number from 1-10 (High score = high caution needed),
+- "analysis_results": A list of objects, each with:
+    - "clause_title": "Short title for the clause (e.g., Termination without Notice)",
     - "clause_text": "The exact text from the document",
-    - "category": "Dangerous", "Not in Best Interest", or "Legal Risk",
-    - "explanation": "Brief legal explanation of why this is bad",
-    - "simplified_explanation": "Break down the legal terms into Grade 8 level English",
-    - "long_term_implications": "What does this mean for the user 1 or 5 years from now?",
-    - "pros": ["List of any hidden benefits or 'silver linings' (if any)", "..."],
-    - "cons": ["Direct disadvantages to the user", "..."],
-    - "recommendation": "What they should ask to change"
-- "overall_verdict": "Safe to sign", "Proceed with caution", or "DO NOT SIGN"
+    - "risk_level": "Low", "Medium", or "High",
+    - "explanation_ei": "Empathetic explanation of why this matters (Grade 8 level)",
+    - "legal_principle": "The core Nigerian legal principle it relates to",
+    - "long_term_risk": "Simplified future implication",
+    - "action_step": "Specific professional advice (e.g., 'Ask for a 30-day notice period instead')",
+- "overall_verdict": "Acceptable with caution", "High Risk - Negotiate", or "Requires Professional Review"
+- "disclaimer": "This analysis is for informational purposes and does not replace legal advice from a qualified Nigerian attorney."
 
 Only respond with the JSON object."""
 
@@ -150,7 +170,8 @@ class RAGService:
                 api_key=settings.OPENROUTER_API_KEY,
                 model=model_name,
                 temperature=0.3,
-                max_tokens=4000
+                max_tokens=4000,
+                timeout=120, # 2 minutes timeout for slow reasoning models
             )
             logger.info("✓ OpenRouter LLM initialized")
         except Exception as e:
@@ -432,6 +453,115 @@ Please provide a helpful, empathetic response based on the legal context above. 
                 "error": "Could not analyze document. Please ensure it is text-based.",
                 "details": str(e)
             }
+
+            
+    def extract_text_from_pdf(self, pdf_bytes: bytes) -> str:
+        """
+        Extract text from a PDF. If it's a scanned PDF (no text), 
+        fall back to Vision OCR for the first few pages.
+        """
+        import io
+        from pypdf import PdfReader
+        
+        try:
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            text = ""
+            for page in reader.pages:
+                page_text = page.extract_text()
+                if page_text:
+                    # Clean up common PDF extraction artifacts
+                    page_text = page_text.replace('\u0000', '')
+                    text += page_text + "\n"
+            
+            # Normalize whitespace: Replace multiple spaces/newlines with single ones
+            import re
+            text = re.sub(r'\n{3,}', '\n\n', text)
+            text = re.sub(r' +', ' ', text)
+
+            # If no text was found, it's likely a scan.
+            if not text.strip() or len(text.strip()) < 50:
+                logger.info("PDF has minimal text layer, likely a scan.")
+                return "The PDF appears to be a scanned image. For the best accuracy, please upload a clear photo of each page using 'Scan with Camera', or use a text-based PDF."
+                
+            return text.strip()
+        except Exception as e:
+            logger.error(f"PDF extraction failed: {e}")
+            raise e
+
+    def extract_text_from_docx(self, docx_bytes: bytes) -> str:
+        """
+        Extract text from a .docx file while preserving basic structure.
+        """
+        import io
+        try:
+            from docx import Document as DocxDocument
+            doc = DocxDocument(io.BytesIO(docx_bytes))
+            full_text = []
+            for para in doc.paragraphs:
+                if para.text.strip():
+                    full_text.append(para.text.strip())
+            
+            return "\n\n".join(full_text)
+        except ImportError:
+            logger.error("python-docx not installed")
+            return "Server Error: Word document processing is currently unavailable."
+        except Exception as e:
+            logger.error(f"DOCX extraction failed: {e}")
+            raise e
+
+    def extract_text_from_txt(self, txt_bytes: bytes) -> str:
+        """
+        Extract text from a raw .txt file with encoding fallback.
+        """
+        try:
+            return txt_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            try:
+                return txt_bytes.decode('latin-1')
+            except Exception as e:
+                logger.error(f"TXT extraction failed: {e}")
+                raise e
+
+    def extract_text_from_image(self, image_bytes: bytes) -> str:
+        """
+        Extract text from an image using a Vision model (OCR).
+        """
+        import base64
+        base64_image = base64.b64encode(image_bytes).decode('utf-8')
+        
+        try:
+            # Use a Vision-capable model
+            # Google Gemini Flash is excellent for this and often available on OpenRouter
+            vision_model = "google/gemini-2.0-flash-exp:free" 
+            
+            client = openai.OpenAI(
+                base_url=settings.OPENROUTER_BASE_URL,
+                api_key=settings.OPENROUTER_API_KEY,
+            )
+            
+            response = client.chat.completions.create(
+                model=vision_model,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "Extract all the text from this legal document image exactly as it appears. Output ONLY the text. Do not add markdown formatting or commentary."},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/jpeg;base64,{base64_image}"
+                                }
+                            }
+                        ]
+                    }
+                ],
+                max_tokens=4000
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"OCR failed: {e}")
+            # Fallback or re-raise
+            raise e
 
     def generate_document(self, doc_type: str, user_details: str) -> str:
         """
