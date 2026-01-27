@@ -39,12 +39,14 @@ class MessageCreate(BaseModel):
     """Request schema for sending a message."""
     content: str = Field(..., min_length=1, max_length=10000)
     conversation_id: Optional[str] = None  # If None, creates new conversation
+    suppress_storage: bool = False  # If True, transcript won't be saved to DB
     
     class Config:
         json_schema_extra = {
             "example": {
                 "content": "I was arrested without being told why. What are my rights?",
-                "conversation_id": None
+                "conversation_id": None,
+                "suppress_storage": False
             }
         }
 

@@ -14,6 +14,8 @@ from sqlalchemy.orm import declarative_base
 from app.core.config import settings
 
 
+from sqlalchemy.pool import NullPool
+
 # Create async engine with connection pooling
 # SQLite doesn't support pool_size/max_overflow, so we conditionally set them
 _is_sqlite = settings.database_url.startswith("sqlite")
@@ -23,13 +25,29 @@ engine_kwargs = {
 }
 
 if not _is_sqlite:
-    engine_kwargs.update({
-        "pool_pre_ping": True,
-        "pool_size": 10,
-        "max_overflow": 20
-    })
+    # Ensure we use an async driver
+    db_url = settings.database_url
+    if db_url.startswith("postgresql://"):
+        db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
 
-engine = create_async_engine(settings.database_url, **engine_kwargs)
+    # Supabase Transaction Pooler (PgBouncer) conflict resolution
+    if "pooler" in db_url:
+        engine_kwargs.update({
+            "poolclass": NullPool,
+            "connect_args": {
+                "prepared_statement_cache_size": 0,
+                "statement_cache_size": 0
+            },
+            "execution_options": {"compiled_cache": None}
+        })
+    else:
+        engine_kwargs.update({
+            "pool_pre_ping": True,
+            "pool_size": 10,
+            "max_overflow": 20
+        })
+
+engine = create_async_engine(db_url if not _is_sqlite else settings.database_url, **engine_kwargs)
 
 # Session factory
 async_session = async_sessionmaker(

@@ -16,6 +16,7 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
+import openai
 
 from app.core.config import settings
 
@@ -51,6 +52,12 @@ Your goal is to help everyday people understand their rights in simple terms.
 DOCUMENT_REVIEW_PROMPT = """You are a highly professional, hawk-eyed Legal Contract Reviewer for the Nigerian jurisdiction. 
 Your goal is to protect the user while maintaining a supportive, empathetic, and reassuring tone.
 
+## Your Process:
+1.  **Identify**: First, determine the SPECIFIC type of contract (e.g., Employment Contract, Tenancy Agreement).
+2.  **Governing Law**: Identify the primary Nigerian law governing this relationship (e.g., Labour Act 2004 for employees, Tenancy Law of Lagos State for tenants).
+3.  **Compliance Check**: Check if the contract breaches any MINIMUM RIGHTS under that law (e.g., Minimum notice periods, Right to fair hearing).
+4.  **Verdict**: If the contract is standard and fair, say so! Do not invent problems. If it is high-risk, flag it clearly.
+
 ## Your Core Personality (Emotional Intelligence):
 1.  **Empathetic & Calm**: Use phrases like "This clause may be concerning, and it's understandable to feel unsure about it," or "I've reviewed this carefully to help you understand your position."
 2.  **Professional & Objective**: Avoid alarmist language. Instead of saying "This is illegal," say "This clause may conflict with standard labor protections" or "This appears to be a high-risk term."
@@ -58,11 +65,11 @@ Your goal is to protect the user while maintaining a supportive, empathetic, and
 
 ## Legal Analysis Framework (Principle-Based):
 Instead of citing specific sub-sections which can be fragile, map findings to Core Nigerian Legal Principles:
--   **Right to Fair Labor Practices** (e.g., related to Termination, Notice, or Excessive Hours)
--   **Freedom of Contract (with Limitations)** (e.g., related to Unfair Bargaining Power)
--   **Right to Due Process/Fair Hearing** (e.g., related to Dispute Resolution)
--   **Protection against Mandatory Self-Incrimination** (e.g., in NDAs or investigations)
--   **Right to Privacy** (e.g., in Data processing clauses)
+-   **Right to Fair Labor Practices** (Labour Act 2004)
+-   **Freedom of Contract (with Limitations)** (Unfair Bargaining Power)
+-   **Right to Due Process/Fair Hearing** (Dispute Resolution)
+-   **Protection against Mandatory Self-Incrimination** (NDAs/Investigations)
+-   **Right to Privacy** (Data Protection Act 2023)
 
 ## Hard Constraints:
 - NEVER state an absolute legal verdict (e.g., "This IS illegal"). Use "May conflict with", "Likely risky", "Typically unenforceable".
@@ -72,23 +79,28 @@ Instead of citing specific sub-sections which can be fragile, map findings to Co
 Document Text:
 "{document_text}"
 
-Respond with a JSON object containing:
-- "document_type": "Employment Contract", "NDA", "Service Agreement", or "General Legal Document",
-- "confidence_score": 0.0 to 1.0 (How sure you are of the document type),
-- "summary": "A 1-sentence supportive summary.",
-- "risk_score": A number from 1-10 (High score = high caution needed),
-- "analysis_results": A list of objects, each with:
-    - "clause_title": "Short title for the clause (e.g., Termination without Notice)",
-    - "clause_text": "The exact text from the document",
-    - "risk_level": "Low", "Medium", or "High",
-    - "explanation_ei": "Empathetic explanation of why this matters (Grade 8 level)",
-    - "legal_principle": "The core Nigerian legal principle it relates to",
-    - "long_term_risk": "Simplified future implication",
-    - "action_step": "Specific professional advice (e.g., 'Ask for a 30-day notice period instead')",
-- "overall_verdict": "Acceptable with caution", "High Risk - Negotiate", or "Requires Professional Review"
-- "disclaimer": "This analysis is for informational purposes and does not replace legal advice from a qualified Nigerian attorney."
+Only respond with the JSON object. Do not include markdown formatting like ```json or ```.
 
-Only respond with the JSON object."""
+Example JSON Structure:
+{
+  "document_type": "Employment Contract",
+  "confidence_score": 0.9,
+  "summary": "This contract outlines standard employment terms but contains a few risky clauses regarding termination.",
+  "risk_score": 7,
+  "analysis_results": [
+    {
+      "clause_title": "Termination Without Cause",
+      "clause_text": "The Employer may terminate this Agreement at any time without notice.",
+      "risk_level": "High",
+      "explanation_ei": "This means you could lose your job instantly without any warning, which is very risky for your financial stability.",
+      "legal_principle": "Right to Fair Labor Practices (Section 11)",
+      "long_term_risk": "Sudden loss of income.",
+      "action_step": "Request a minimum 14-day notice period."
+    }
+  ],
+  "overall_verdict": "High Risk - Negotiate",
+  "disclaimer": "This analysis is for informational purposes and does not replace legal advice from a qualified Nigerian attorney."
+}"""
 
 DOCUMENT_GENERATION_PROMPT = """You are a Legal Document Generator.
 Your goal is to create a professional, legally sound TEMPLATE based on the user's request.
@@ -429,64 +441,117 @@ Please provide a helpful, empathetic response based on the legal context above. 
             Dict with risk analysis
         """
         try:
+            logger.info(f"Analyzing document ({len(document_text)} chars)...")
             response = self.llm.invoke([
-                SystemMessage(content="You are a strict contract reviewer. Respond only with valid JSON."),
+                SystemMessage(content="You are a strict contract reviewer. Respond only with valid JSON. Do not use markdown blocks."),
                 HumanMessage(content=DOCUMENT_REVIEW_PROMPT.format(document_text=document_text))
             ])
             
-            # Clean up response content if it contains markdown code blocks
-            content = response.content
+            content = response.content.strip()
+            
+            # Helper to extract JSON if model adds chatter
+            def _extract_json(text):
+                import re
+                try:
+                    # Finds the first '{' and the last '}'
+                    match = re.search(r'\{.*\}', text, re.DOTALL)
+                    if match:
+                        return match.group(0)
+                    return text
+                except:
+                    return text
+
+            # Clean up response content
             if "```json" in content:
                 content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
                 content = content.split("```")[1].split("```")[0].strip()
+            else:
+                content = _extract_json(content)
                 
             import json
-            result = json.loads(content)
+            try:
+                result = json.loads(content)
+            except json.JSONDecodeError as je:
+                logger.error(f"JSON Decode Error: {je}")
+                logger.error(f"Raw LLM Response: {content}")
+                # Fallback: try to repair common JSON errors if needed, but for now just fail gracefully
+                raise je
             
             # Add disclaimer to analysis as well
             result["disclaimer"] = "This analysis is automated and for informational purposes only. Consult a lawyer."
+            
+            # Ensure required fields exist
+            if "risk_score" not in result:
+                result["risk_score"] = 5
+            if "analysis_results" not in result:
+                result["analysis_results"] = []
+
             return result
         except Exception as e:
             logger.error(f"Document analysis failed: {e}")
             return {
                 "error": "Could not analyze document. Please ensure it is text-based.",
-                "details": str(e)
+                "details": str(e),
+                "risk_score": 5, # Return a safe default so frontend doesn't crash
+                "analysis_results": [],
+                "summary": "Analysis failed. Please try again."
             }
 
             
     def extract_text_from_pdf(self, pdf_bytes: bytes) -> str:
         """
-        Extract text from a PDF. If it's a scanned PDF (no text), 
-        fall back to Vision OCR for the first few pages.
+        Extract text from a PDF with multiple fallback methods.
+        Tries pypdf first, then pdfplumber for better extraction from complex layouts.
         """
         import io
-        from pypdf import PdfReader
+        text = ""
         
+        # Method 1: pypdf (Fast, standard)
         try:
+            from pypdf import PdfReader
             reader = PdfReader(io.BytesIO(pdf_bytes))
-            text = ""
+            pypdf_text = ""
             for page in reader.pages:
                 page_text = page.extract_text()
                 if page_text:
-                    # Clean up common PDF extraction artifacts
-                    page_text = page_text.replace('\u0000', '')
-                    text += page_text + "\n"
-            
-            # Normalize whitespace: Replace multiple spaces/newlines with single ones
+                    pypdf_text += page_text + "\n"
+            text = pypdf_text.strip()
+        except Exception as e:
+            logger.warning(f"pypdf extraction failed or partially failed: {e}")
+
+        # Method 2: pdfplumber (Better for tables/complex layouts)
+        if not text or len(text) < 100:
+            try:
+                import pdfplumber
+                with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+                    plumber_text = ""
+                    for page in pdf.pages:
+                        page_text = page.extract_text()
+                        if page_text:
+                            plumber_text += page_text + "\n"
+                    
+                    if len(plumber_text.strip()) > len(text):
+                        text = plumber_text.strip()
+            except Exception as e:
+                logger.warning(f"pdfplumber extraction failed: {e}")
+
+        # Post-processing
+        if text:
             import re
+            # Clean up common PDF extraction artifacts
+            text = text.replace('\u0000', '')
             text = re.sub(r'\n{3,}', '\n\n', text)
             text = re.sub(r' +', ' ', text)
-
-            # If no text was found, it's likely a scan.
-            if not text.strip() or len(text.strip()) < 50:
+            
+            # If still very short, it might be a scan.
+            if len(text.strip()) < 50:
                 logger.info("PDF has minimal text layer, likely a scan.")
                 return "The PDF appears to be a scanned image. For the best accuracy, please upload a clear photo of each page using 'Scan with Camera', or use a text-based PDF."
                 
             return text.strip()
-        except Exception as e:
-            logger.error(f"PDF extraction failed: {e}")
-            raise e
+        
+        return "I was unable to extract any readable text from this PDF. It might be encrypted, corrupted, or a scanned image."
 
     def extract_text_from_docx(self, docx_bytes: bytes) -> str:
         """
@@ -524,44 +589,69 @@ Please provide a helpful, empathetic response based on the legal context above. 
 
     def extract_text_from_image(self, image_bytes: bytes) -> str:
         """
-        Extract text from an image using a Vision model (OCR).
+        Extract text from an image using a Vision model (OCR) with fallback logic.
+        Uses high-quality free models from OpenRouter.
         """
         import base64
+        import time
         base64_image = base64.b64encode(image_bytes).decode('utf-8')
         
-        try:
-            # Use a Vision-capable model
-            # Google Gemini Flash is excellent for this and often available on OpenRouter
-            vision_model = "google/gemini-2.0-flash-exp:free" 
-            
-            client = openai.OpenAI(
-                base_url=settings.OPENROUTER_BASE_URL,
-                api_key=settings.OPENROUTER_API_KEY,
-            )
-            
-            response = client.chat.completions.create(
-                model=vision_model,
-                messages=[
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": "Extract all the text from this legal document image exactly as it appears. Output ONLY the text. Do not add markdown formatting or commentary."},
-                            {
-                                "type": "image_url",
-                                "image_url": {
-                                    "url": f"data:image/jpeg;base64,{base64_image}"
+        # Prioritized list of free vision models on OpenRouter
+        vision_models = [
+            "qwen/qwen-2.5-vl-7b-instruct:free",
+            "nvidia/nemotron-nano-12b-v2-vl:free",
+            "google/gemma-3-12b-it:free",
+            "google/gemini-2.0-flash-exp:free" # Often high rate limits, kept as fallback
+        ]
+        
+        client = openai.OpenAI(
+            base_url=settings.OPENROUTER_BASE_URL,
+            api_key=settings.OPENROUTER_API_KEY,
+        )
+        
+        last_error = None
+        for model in vision_models:
+            try:
+                logger.info(f"Attempting OCR with model: {model}")
+                response = client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Extract all the text from this legal document image exactly as it appears. Output ONLY the text. Do not add markdown formatting or commentary. If you cannot extract text, say NO_TEXT_FOUND."},
+                                {
+                                    "type": "image_url",
+                                    "image_url": {
+                                        "url": f"data:image/jpeg;base64,{base64_image}"
+                                    }
                                 }
-                            }
-                        ]
-                    }
-                ],
-                max_tokens=4000
-            )
-            return response.choices[0].message.content.strip()
-        except Exception as e:
-            logger.error(f"OCR failed: {e}")
-            # Fallback or re-raise
-            raise e
+                            ]
+                        }
+                    ],
+                    max_tokens=4000,
+                    timeout=45 # Moderate timeout for OCR
+                )
+                
+                result = response.choices[0].message.content.strip()
+                if result and result != "NO_TEXT_FOUND":
+                    logger.info(f"✓ OCR successful with {model}")
+                    return result
+                    
+            except Exception as e:
+                logger.warning(f"OCR failed for model {model}: {e}")
+                last_error = e
+                # Brief sleep before trying next provider/model to avoid overwhelming API
+                time.sleep(0.5)
+                continue
+                
+        # If all free models fail, give a descriptive error
+        error_msg = f"OCR Failed: {str(last_error)}"
+        if "429" in str(last_error):
+            error_msg = "The OCR service is currently busy. Please wait a moment and try again, or upload a text-based PDF."
+            
+        logger.error(f"All OCR models failed: {last_error}")
+        raise Exception(error_msg)
 
     def generate_document(self, doc_type: str, user_details: str) -> str:
         """
