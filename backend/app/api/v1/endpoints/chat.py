@@ -651,7 +651,7 @@ async def send_message_public(
         return PublicChatResponse(
             content=error_detail,
             sources=[],
-            confidence_score=0.0
+            confidence_score="0.0"
         )
 
 

@@ -20,9 +20,18 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     OPENROUTER_BASE_URL: str = "https://openrouter.ai/api/v1"
     
+    # Aliases for code consistency
+    @property
+    def openrouter_api_key(self) -> str:
+        return self.OPENROUTER_API_KEY
+    
+    @property
+    def openrouter_base_url(self) -> str:
+        return self.OPENROUTER_BASE_URL
+    
     # Model Configuration
     # Nemotron 3 Nano is the target for this update.
-    MODEL_NAME: str = "nvidia/nemotron-3-nano-30b-a3b:free"
+    MODEL_NAME: str = "google/gemini-2.0-flash-exp:free"
     MODEL_CHAT: str = ""
     MODEL_ANALYSIS: str = ""
     MODEL_GENERATION: str = ""

@@ -10,9 +10,8 @@ import logging
 from typing import List, Optional, Tuple
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI
-from langchain_community.vectorstores import Chroma
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
 from langchain_core.messages import HumanMessage, SystemMessage
@@ -160,13 +159,13 @@ class RAGService:
         
         # Step 1: Initialize local embeddings (Default for privacy/reliability)
         try:
-            logger.info(f"Step 1/4: Initializing Local Embeddings ({settings.embedding_model})...")
-            self.embeddings = HuggingFaceEmbeddings(
-                model_name=settings.embedding_model,
-                model_kwargs={'device': 'cpu'},
-                encode_kwargs={'normalize_embeddings': True}
+            logger.info(f"Step 1/4: Initializing Local Embeddings...")
+            self.embeddings = OpenAIEmbeddings(
+                model="text-embedding-ada-002",
+                openai_api_base=settings.openrouter_base_url,
+                openai_api_key=settings.openrouter_api_key
             )
-            logger.info(f"✓ Local HuggingFace Embeddings initialized")
+            logger.info(f"✓ Local OpenAI Embeddings initialized")
         except Exception as e:
             self.initialization_error = f"Failed to initialize embeddings: {e}"
             logger.error(self.initialization_error)
@@ -255,7 +254,7 @@ class RAGService:
                 "chunk_index": i,
                 "total_chunks": len(chunks),
                 "jurisdiction": "Nigeria",
-                "chunk_hash": hashlib.md5(chunk.encode()).hexdigest()[:8]
+                "chunk_hash": hashlib.sha256(chunk.encode()).hexdigest()[:8]
             }
             if metadata:
                 doc_metadata.update(metadata)
