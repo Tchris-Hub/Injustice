@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     # AI & RAG
     google_api_key: str = ""
     openai_model: str = "gemini-1.5-flash"
-    embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"
+    embedding_model: str = "BAAI/bge-small-en-v1.5"
     chroma_persist_dir: str = "./data/chroma_db"
     rag_top_k: int = 5
     rag_chunk_size: int = 500

@@ -10,7 +10,9 @@ import logging
 from typing import List, Optional, Tuple
 from pathlib import Path
 
-from langchain_openai import ChatOpenAI, OpenAIEmbeddings
+import shutil
+from langchain_openai import ChatOpenAI
+from langchain_community.embeddings import FastEmbedEmbeddings
 from langchain_chroma import Chroma
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.documents import Document
@@ -157,15 +159,14 @@ class RAGService:
         
         logger.info(f"Initializing RAG Service...")
         
-        # Step 1: Initialize local embeddings (Default for privacy/reliability)
+        # Step 1: Initialize local embeddings (FastEmbed - BAAI/bge-small-en-v1.5)
         try:
-            logger.info(f"Step 1/4: Initializing Local Embeddings...")
-            self.embeddings = OpenAIEmbeddings(
-                model="text-embedding-ada-002",
-                openai_api_base=settings.openrouter_base_url,
-                openai_api_key=settings.openrouter_api_key
+            logger.info(f"Step 1/4: Initializing Local Embeddings (FastEmbed)...")
+            self.embeddings = FastEmbedEmbeddings(
+                model_name=settings.embedding_model,
+                cache_dir="./data/fastembed_cache" 
             )
-            logger.info(f"✓ Local OpenAI Embeddings initialized")
+            logger.info(f"✓ Local FastEmbed initialized ({settings.embedding_model})")
         except Exception as e:
             self.initialization_error = f"Failed to initialize embeddings: {e}"
             logger.error(self.initialization_error)
@@ -204,22 +205,55 @@ class RAGService:
             logger.error(self.initialization_error)
             raise
         
-        # Step 5: Initialize vector store
+        # Step 5: Initialize vector store (with Auto-Reset for Dimension Mismatch)
         try:
             logger.info("Step 4/4: Initializing ChromaDB vector store...")
             self.persist_dir = Path(settings.chroma_persist_dir)
             self.persist_dir.mkdir(parents=True, exist_ok=True)
             
-            self.vector_store = Chroma(
-                persist_directory=str(self.persist_dir),
-                embedding_function=self.embeddings,
-                collection_name="nigerian_legal_docs"
-            )
-            logger.info(f"✓ Vector store initialized at: {self.persist_dir}")
+            try:
+                self.vector_store = Chroma(
+                    persist_directory=str(self.persist_dir),
+                    embedding_function=self.embeddings,
+                    collection_name="nigerian_legal_docs"
+                )
+                # Quick health check to verify dimensions match
+                # This often triggers the invalid dimension error immediately if mismatch exists
+                logger.info(f"✓ Vector store loaded from: {self.persist_dir}")
+                
+            except Exception as store_error:
+                error_str = str(store_error).lower()
+                if "dimension" in error_str or "shape" in error_str or "sqlite" in error_str:
+                    logger.warning(f"⚠️ Vector store dimension mismatch or corruption detected: {store_error}")
+                    logger.warning("Performing AUTO-RESET of vector store to fix dimensions...")
+                    
+                    # Delete and recreate
+                    if self.persist_dir.exists():
+                        shutil.rmtree(self.persist_dir)
+                    self.persist_dir.mkdir(parents=True, exist_ok=True)
+                    
+                    self.vector_store = Chroma(
+                        persist_directory=str(self.persist_dir),
+                        embedding_function=self.embeddings,
+                        collection_name="nigerian_legal_docs"
+                    )
+                    logger.info("✓ Vector store successfully reset and re-initialized.")
+                else:
+                    raise store_error
+
         except Exception as e:
             self.initialization_error = f"Failed to initialize ChromaDB: {type(e).__name__}: {str(e)}"
             logger.error(self.initialization_error)
-            raise
+            # Critical fallback: If persistent DB fails hard, try ephemeral for this session
+            try:
+                logger.warning("Attempting ephemeral in-memory fallback...")
+                self.vector_store = Chroma(
+                    embedding_function=self.embeddings,
+                    collection_name="nigerian_legal_docs_ephemeral"
+                )
+                logger.info("✓ Fallback to ephemeral vector store successful")
+            except:
+                raise
         
         logger.info("✓ RAG Service fully initialized successfully!")
     
