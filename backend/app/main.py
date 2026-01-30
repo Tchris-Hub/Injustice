@@ -58,14 +58,15 @@ async def lifespan(app: FastAPI):
         logger.error(f"Database initialization failed: {e}")
         # Continue anyway - DB might be pre-initialized
     
-    # Initialize RAG Service (Warmup)
-    try:
-        logger.info("Warming up RAG Service (loading LLM & Embeddings)...")
-        get_rag_service()
-        logger.info("RAG Service warmup complete")
-    except Exception as e:
-        logger.error(f"RAG Service warmup failed: {e}")
-        # Non-critical for startup, but requests will be slow/fail later
+    # Initialize RAG Service (Lazy Load - disabled to reduce startup memory)
+    # The RAG service will be initialized on first request instead
+    # try:
+    #     logger.info("Warming up RAG Service (loading LLM & Embeddings)...")
+    #     get_rag_service()
+    #     logger.info("RAG Service warmup complete")
+    # except Exception as e:
+    #     logger.error(f"RAG Service warmup failed: {e}")
+    #     # Non-critical for startup, but requests will be slow/fail later
     
     yield  # Application runs here
     
