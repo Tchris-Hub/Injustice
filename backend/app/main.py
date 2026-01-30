@@ -195,6 +195,22 @@ async def health_check():
     }
 
 
+@app.get("/debug/env", tags=["Health"])
+async def check_env():
+    """
+    Debug endpoint to check if environment variables are set.
+    Only shows if variables exist, not their values.
+    """
+    import os
+    return {
+        "openrouter_api_key_set": bool(os.getenv("OPENROUTER_API_KEY")),
+        "model_name": os.getenv("MODEL_NAME", "NOT_SET"),
+        "openrouter_base_url": os.getenv("OPENROUTER_BASE_URL", "NOT_SET"),
+        "database_url_set": bool(os.getenv("DATABASE_URL")),
+        "secret_key_set": bool(os.getenv("SECRET_KEY")),
+    }
+
+
 # ---------------------------------------------
 # Global Exception Handler
 # ---------------------------------------------
