@@ -55,8 +55,8 @@ class TokenResponse(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "access_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-                "refresh_token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
+                "access_token": "ACCESS_TOKEN_EXAMPLE",
+                "refresh_token": "REFRESH_TOKEN_EXAMPLE",
                 "token_type": "bearer",
                 "expires_at": "2024-01-15T12:00:00Z"
             }

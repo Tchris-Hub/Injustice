@@ -7,7 +7,8 @@ Implements industry-standard security practices.
 
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
-from jose import JWTError, jwt
+import jwt
+from jwt import PyJWTError
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
@@ -182,7 +183,7 @@ def decode_token(token: str) -> Optional[TokenData]:
             
         return TokenData(user_id=user_id, token_type=token_type)
         
-    except JWTError:
+    except PyJWTError:
         return None
 
 

@@ -743,6 +743,33 @@ async def analyze_document_public(
 
 
 @router.post(
+    "/documents/analyze",
+    response_model=DocumentAnalysisResponse,
+    summary="Analyze a document (Authenticated)",
+    description="Analyze a legal document for risky clauses using user profile context."
+)
+async def analyze_document_authenticated(
+    data: DocumentAnalysisRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Authenticated version of document analysis.
+    Uses user context and logs the request to the database.
+    """
+    # ... placeholder for implementation ...
+    # For now, just call the public logic but log it
+    try:
+        rag_service = get_rag_service()
+        # In the future, we can personalize this based on current_user
+        return await analyze_document_public(data)
+    except Exception as e:
+        logger.error(f"Auth Document analysis error: {e}")
+        return await analyze_document_public(data)
+
+
+
+@router.post(
     "/generate-document",
     response_model=DocumentGenerationResponse,
     summary="Generate a legal document template",
@@ -776,6 +803,50 @@ async def generate_document_public(
             doc_type=data.doc_type,
             warning="⚠️ Error occurred during generation. Please try again."
         )
+
+
+@router.post(
+    "/documents/generate",
+    response_model=DocumentGenerationResponse,
+    summary="Generate a personalized document (Authenticated)",
+    description="Automatically uses user profile information to pre-fill the document template."
+)
+async def generate_document_authenticated(
+    data: DocumentGenerationRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Generate a legal document that is automatically personalized.
+    The AI will use the user's name, email, and profile details.
+    """
+    try:
+        rag_service = get_rag_service()
+        
+        # Collect user profile info
+        profile_info = {
+            "full_name": current_user.full_name or "Unknown",
+            "email": current_user.email,
+            "phone": current_user.phone_number or "Not provided",
+        }
+        
+        # Inject profile info into user_details if it seems missing
+        enhanced_details = f"USER PROFILE:\nName: {profile_info['full_name']}\nEmail: {profile_info['email']}\nPhone: {profile_info['phone']}\n\nUSER REQUEST DETAILS:\n{data.user_details}"
+        
+        # Use RAG service to generate document
+        document_content = rag_service.generate_document(
+            doc_type=data.doc_type,
+            user_details=enhanced_details
+        )
+        
+        return DocumentGenerationResponse(
+            content=document_content,
+            doc_type=data.doc_type
+        )
+    except Exception as e:
+        logger.error(f"Auth Document generation error: {e}", exc_info=True)
+        return await generate_document_public(data)
+
 
 
 

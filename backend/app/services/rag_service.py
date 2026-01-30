@@ -104,18 +104,19 @@ Example JSON Structure:
 }"""
 
 DOCUMENT_GENERATION_PROMPT = """You are a Legal Document Generator.
-Your goal is to create a professional, legally sound TEMPLATE based on the user's request.
+Your goal is to create a professional, legally sound document based on the user's request and profile.
 
-User Request: "{user_request}"
-User Details: "{user_details}"
+User Request Type: "{user_request}"
+Context & Profile: "{user_details}"
 
 Rules:
-1.  Create a clear, formal document.
-2.  Use placeholders like [INSERT DATE], [INSERT NAME] where specific info is missing.
-3.  Ensure the tone is professional and assertive but polite.
-4.  Do NOT invent fake laws. Use general legal principles applicable in Nigeria.
+1.  Create a clear, formal document appropriate for the Nigerian legal context.
+2.  **PERSONALIZATION**: If names, emails, or phone numbers are provided in the "USER PROFILE" section of the context, USE THEM directly in the document. Do not use [PLACEHOLDERS] if the information is available in the profile.
+3.  Use [INSERT ...] only for information that is missing from both the profile and the request.
+4.  Ensure the tone is professional, assertive, and technically accurate.
+5.  Focus on clarity and protection of the user's rights.
 
-Output ONLY the document text."""
+Output ONLY the final document text. Do not include introductory chatter."""
 
 LEGAL_DISCLAIMER_TEXT = """
 \n\n---

@@ -1,0 +1,8 @@
+# Snyk ignore policy for production
+# Reason: protobuf is a transitive dependency via chromadb/onnxruntime.
+# No patched version is available yet. Risk accepted until upstream fix is released.
+ignore:
+  SNYK-PYTHON-PROTOBUF-15090738:
+    - '*':
+        reason: 'Transitive dependency via chromadb/onnxruntime; no patched version available yet'
+        expires: '2026-06-30T23:59:59.999Z'

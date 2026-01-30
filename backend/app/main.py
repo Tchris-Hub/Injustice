@@ -198,16 +198,31 @@ async def health_check():
 @app.get("/debug/env", tags=["Health"])
 async def check_env():
     """
-    Debug endpoint to check if environment variables are set.
-    Only shows if variables exist, not their values.
+    Enhanced diagnostic endpoint to check environment health.
     """
     import os
+    
+    # Check variables
+    status = {
+        "OPENROUTER_API_KEY": "SET ✅" if os.getenv("OPENROUTER_API_KEY") else "MISSING ❌",
+        "MODEL_NAME": os.getenv("MODEL_NAME", "NOT SET (Using Gemini Flash Default)"),
+        "DATABASE_URL": "SET ✅" if os.getenv("DATABASE_URL") else "MISSING ❌",
+        "SECRET_KEY": "SET ✅" if os.getenv("SECRET_KEY") else "MISSING ❌ (SECURITY RISK)",
+        "ENVIRONMENT": os.getenv("ENVIRONMENT", "NOT SET"),
+    }
+    
+    health_score = sum(1 for v in status.values() if "SET ✅" in str(v))
+    total_needed = 4 # Base keys
+    
     return {
-        "openrouter_api_key_set": bool(os.getenv("OPENROUTER_API_KEY")),
-        "model_name": os.getenv("MODEL_NAME", "NOT_SET"),
-        "openrouter_base_url": os.getenv("OPENROUTER_BASE_URL", "NOT_SET"),
-        "database_url_set": bool(os.getenv("DATABASE_URL")),
-        "secret_key_set": bool(os.getenv("SECRET_KEY")),
+        "summary": "CRITICAL CONFIGURATION MISSING!" if status["SECRET_KEY"] == "MISSING ❌ (SECURITY RISK)" else "Configuration looks good",
+        "variable_status": status,
+        "health_score": f"{health_score}/{total_needed}",
+        "advice": [
+            "Add SECRET_KEY to Railway variables if it shows MISSING." if "MISSING" in status["SECRET_KEY"] else None,
+            "Ensure MODEL_NAME is a valid OpenRouter slug (e.g. google/gemini-2.0-flash-exp:free)." if "NOT SET" in status["MODEL_NAME"] else None
+        ],
+        "is_production": settings.is_production
     }
 
 
