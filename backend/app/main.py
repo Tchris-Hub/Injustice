@@ -157,6 +157,27 @@ async def log_requests(request: Request, call_next):
     return response
 
 
+# Global Error Handler for Production Debugging
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Catch-all exception handler to log tracebacks for 500 errors.
+    """
+    import traceback
+    error_trace = traceback.format_exc()
+    logger.error(f"GLOBAL EXCEPTION DETECTED: {str(exc)}")
+    logger.error(f"Traceback:\n{error_trace}")
+    
+    return JSONResponse(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        content={
+            "detail": "Internal Server Error. Our team has been notified.",
+            "error_type": type(exc).__name__,
+            "message": str(exc) if settings.debug else "Sensitive error info hidden in production."
+        }
+    )
+
+
 # ---------------------------------------------
 # Include Routers
 # ---------------------------------------------
