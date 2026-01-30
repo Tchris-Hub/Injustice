@@ -40,16 +40,17 @@ if not _is_sqlite:
             },
             "execution_options": {"compiled_cache": None}
         })
-    # Railway uses PgBouncer - disable prepared statements for compatibility
-    engine_kwargs.update({
-        "pool_pre_ping": True,
-        "pool_size": 5,  # Reduced from 10 for Railway memory limits
-        "max_overflow": 10,  # Reduced from 20
-        "connect_args": {
-            "prepared_statement_cache_size": 0,
-            "statement_cache_size": 0
-        }
-    })
+    else:
+        # Railway uses PgBouncer - disable prepared statements for compatibility
+        engine_kwargs.update({
+            "pool_pre_ping": True,
+            "pool_size": 5,  # Reduced from 10 for Railway memory limits
+            "max_overflow": 10,  # Reduced from 20
+            "connect_args": {
+                "prepared_statement_cache_size": 0,
+                "statement_cache_size": 0
+            }
+        })
 
 engine = create_async_engine(db_url if not _is_sqlite else settings.database_url, **engine_kwargs)
 
