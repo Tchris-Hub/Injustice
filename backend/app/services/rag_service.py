@@ -162,9 +162,15 @@ class RAGService:
         # Step 1: Initialize local embeddings (FastEmbed - BAAI/bge-small-en-v1.5)
         try:
             logger.info(f"Step 1/4: Initializing Local Embeddings (FastEmbed)...")
+            
+            # Set longer timeout for model download on Railway
+            import os
+            os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "300")  # 5 minutes
+            
             self.embeddings = FastEmbedEmbeddings(
                 model_name=settings.embedding_model,
-                cache_dir="./data/fastembed_cache" 
+                cache_dir="./data/fastembed_cache",
+                max_length=512  # Optimize for speed
             )
             logger.info(f"✓ Local FastEmbed initialized ({settings.embedding_model})")
         except Exception as e:
