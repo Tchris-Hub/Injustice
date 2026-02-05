@@ -83,13 +83,13 @@ Document Text:
 Only respond with the JSON object. Do not include markdown formatting like ```json or ```.
 
 Example JSON Structure:
-{
+{{
   "document_type": "Employment Contract",
   "confidence_score": 0.9,
   "summary": "This contract outlines standard employment terms but contains a few risky clauses regarding termination.",
   "risk_score": 7,
   "analysis_results": [
-    {
+    {{
       "clause_title": "Termination Without Cause",
       "clause_text": "The Employer may terminate this Agreement at any time without notice.",
       "risk_level": "High",
@@ -97,11 +97,17 @@ Example JSON Structure:
       "legal_principle": "Right to Fair Labor Practices (Section 11)",
       "long_term_risk": "Sudden loss of income.",
       "action_step": "Request a minimum 14-day notice period."
-    }
+    }}
   ],
+  "authenticity_markers": {{
+    "has_stamp": true,
+    "has_signature": false,
+    "details": "Official stamp from 'Lagos High Court' detected, but no signature found."
+  }},
   "overall_verdict": "High Risk - Negotiate",
   "disclaimer": "This analysis is for informational purposes and does not replace legal advice from a qualified Nigerian attorney."
-}"""
+}}"""
+
 
 DOCUMENT_GENERATION_PROMPT = """You are a Legal Document Generator.
 Your goal is to create a professional, legally sound document based on the user's request and profile.
@@ -111,7 +117,10 @@ Context & Profile: "{user_details}"
 
 Rules:
 1.  Create a clear, formal document appropriate for the Nigerian legal context.
-2.  **PERSONALIZATION**: If names, emails, or phone numbers are provided in the "USER PROFILE" section of the context, USE THEM directly in the document. Do not use [PLACEHOLDERS] if the information is available in the profile.
+2.  **PERSONALIZATION (CRITICAL)**: You MUST use the exact details provided in the Context/Profile.
+    - If context says "Landlord: John Doe", the document MUST be between "John Doe" and the other party.
+    - Do NOT use placeholders like [Landlord Name] if the data is available.
+    - If a specific detail is missing, use a clear placeholder like [INSERT DATE].
 3.  Use [INSERT ...] only for information that is missing from both the profile and the request.
 4.  Ensure the tone is professional, assertive, and technically accurate.
 5.  Focus on clarity and protection of the user's rights.
@@ -188,8 +197,8 @@ class RAGService:
                 base_url=settings.OPENROUTER_BASE_URL,
                 api_key=settings.OPENROUTER_API_KEY,
                 model=model_name,
-                temperature=0.3,
-                max_tokens=4000,
+                temperature=0.2, # Lower temperature for more consistent analysis
+                max_tokens=8000, # Increased for deep analysis of long docs
                 timeout=120, # 2 minutes timeout for slow reasoning models
             )
             logger.info("✓ OpenRouter LLM initialized")
@@ -482,8 +491,11 @@ Please provide a helpful, empathetic response based on the legal context above. 
         """
         try:
             logger.info(f"Analyzing document ({len(document_text)} chars)...")
+            
+            # Use a more capable model for analysis if possible, or same default
+            # Forcing JSON mode often helps models comply
             response = self.llm.invoke([
-                SystemMessage(content="You are a strict contract reviewer. Respond only with valid JSON. Do not use markdown blocks."),
+                SystemMessage(content="You are a strict, detail-oriented contract reviewer. You output ONLY valid JSON. Your response must be a single JSON object."),
                 HumanMessage(content=DOCUMENT_REVIEW_PROMPT.format(document_text=document_text))
             ])
             
@@ -494,29 +506,39 @@ Please provide a helpful, empathetic response based on the legal context above. 
                 import re
                 try:
                     # Finds the first '{' and the last '}'
-                    match = re.search(r'\{.*\}', text, re.DOTALL)
+                    match = re.search(r'(\{.*\})', text, re.DOTALL)
                     if match:
-                        return match.group(0)
+                        return match.group(1)
                     return text
                 except:
                     return text
 
             # Clean up response content
+            json_content = content
             if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
+                json_content = content.split("```json")[1].split("```")[0].strip()
             elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
+                json_content = content.split("```")[1].split("```")[0].strip()
             else:
-                content = _extract_json(content)
+                json_content = _extract_json(content)
+
+
                 
             import json
             try:
-                result = json.loads(content)
+                result = json.loads(json_content)
             except json.JSONDecodeError as je:
                 logger.error(f"JSON Decode Error: {je}")
                 logger.error(f"Raw LLM Response: {content}")
-                # Fallback: try to repair common JSON errors if needed, but for now just fail gracefully
-                raise je
+                logger.error(f"Extracted Content: {json_content}")
+                
+                # Try one last-ditch effort: remove thinking process if present (some models use <think> tags)
+                if "<think>" in content and "</think>" in content:
+                    clean_content = content.split("</think>")[-1].strip()
+                    json_content = _extract_json(clean_content)
+                    result = json.loads(json_content)
+                else:
+                    raise je
             
             # Add disclaimer to analysis as well
             result["disclaimer"] = "This analysis is automated and for informational purposes only. Consult a lawyer."
@@ -529,14 +551,21 @@ Please provide a helpful, empathetic response based on the legal context above. 
 
             return result
         except Exception as e:
-            logger.error(f"Document analysis failed: {e}")
+            logger.error(f"Document analysis failed: {e}", exc_info=True)
+            # Return either the specific error or a generic one if it contains sensitive info
+            error_message = str(e)
+            if "JSON" in error_message:
+                error_message = "The AI could not format the analysis correctly. Please try again or use a different model."
+            
             return {
-                "error": "Could not analyze document. Please ensure it is text-based.",
-                "details": str(e),
-                "risk_score": 5, # Return a safe default so frontend doesn't crash
+                "error": "Analysis Failed",
+                "details": error_message,
+                "risk_score": 0, # Use 0 to indicate failure explicitly in UI
                 "analysis_results": [],
-                "summary": "Analysis failed. Please try again."
+                "summary": "We encountered an error analyzing this document. It might be due to a formatting error in the AI response.",
+                "authenticity_markers": { "has_stamp": False, "details": "Analysis failed." }
             }
+
 
             
     def extract_text_from_pdf(self, pdf_bytes: bytes) -> str:
