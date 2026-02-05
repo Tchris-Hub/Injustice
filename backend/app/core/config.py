@@ -30,11 +30,20 @@ class Settings(BaseSettings):
         return self.OPENROUTER_BASE_URL
     
     # Model Configuration
-    # Nemotron 3 Nano is the target for this update.
     MODEL_NAME: str = "google/gemini-2.0-flash-exp:free"
     MODEL_CHAT: str = ""
     MODEL_ANALYSIS: str = ""
     MODEL_GENERATION: str = ""
+    
+    # Free model fallbacks for high reliability during presentations
+    MODEL_FALLBACKS: List[str] = [
+        "google/gemini-2.0-flash-exp:free",
+        "google/gemini-2.0-pro-exp-02-05:free",
+        "deepseek/deepseek-chat:free",
+        "mistralai/mistral-7b-instruct:free",
+        "openchat/openchat-7b:free"
+    ]
+
 
     @property
     def MODEL_DEFAULT(self) -> str:

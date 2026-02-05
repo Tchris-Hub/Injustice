@@ -273,6 +273,38 @@ class RAGService:
         
         logger.info("✓ RAG Service fully initialized successfully!")
     
+    def _invoke_with_fallback(self, messages: List[Any]) -> Any:
+        """
+        Invoke the LLM with automatic failover to other free models if one fails.
+        Useful for staying functional on free tiers during high demand.
+        """
+        last_error = None
+        
+        # Try the default model first, then the fallbacks
+        models_to_try = [self.llm.model] + [m for m in settings.MODEL_FALLBACKS if m != self.llm.model]
+        
+        for model_name in models_to_try:
+            try:
+                # Update current model name for this attempt
+                self.llm.model = model_name
+                logger.info(f"Attempting LLM call with model: {model_name}")
+                return self.llm.invoke(messages)
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+                
+                # If it's a rate limit or "overloaded" error, definitely try another model
+                if any(x in error_str for x in ["429", "rate limit", "overloaded", "busy", "limit exceeded"]):
+                    logger.warning(f"⚠️ Model {model_name} is rate-limited or busy. Trying fallback...")
+                    continue
+                else:
+                    # For other errors, log and try one more just in case it's model-specific
+                    logger.error(f"❌ Model {model_name} failed with error: {e}")
+                    continue
+        
+        # If we get here, all models failed
+        logger.error("🛑 All LLM models failed to respond.")
+        raise last_error
     def ingest_document(
         self,
         content: str,
@@ -319,6 +351,7 @@ class RAGService:
         
         logger.info(f"Ingested '{title}': {len(chunks)} chunks created")
         return len(chunks)
+
     
     def retrieve_relevant_chunks(
         self,
@@ -360,7 +393,7 @@ class RAGService:
             Dict with risk_level, legal_topic, escalation_needed, escalation_reason
         """
         try:
-            response = self.llm.invoke([
+            response = self._invoke_with_fallback([
                 SystemMessage(content="You are a risk assessment system. Respond only with valid JSON."),
                 HumanMessage(content=RISK_ASSESSMENT_PROMPT.format(message=message))
             ])
@@ -444,7 +477,7 @@ Please provide a helpful, empathetic response based on the legal context above. 
         
         # Generate response
         try:
-            response = self.llm.invoke(messages)
+            response = self._invoke_with_fallback(messages)
             
             # Determine confidence based on source relevance
             avg_relevance = sum(s["relevance_score"] for s in sources) / len(sources) if sources else 0
