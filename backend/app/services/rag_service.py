@@ -7,7 +7,7 @@ Combines vector search with LLM generation for accurate, cited responses.
 
 import hashlib
 import logging
-from typing import List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from pathlib import Path
 
 import shutil
