@@ -29,5 +29,7 @@ RUN pip install --no-cache-dir gunicorn uvicorn
 COPY . .
 
 # Run the application
-# Using Gunicorn with Uvicorn workers for production performance
-CMD gunicorn -w 4 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:$PORT
+# Using 1 worker because each worker loads large AI models in memory (FastEmbed/RAG). 
+# Multiple workers on low-RAM plans (like Railway) cause OOM (Out of Memory) crashes.
+CMD gunicorn -w 1 -k uvicorn.workers.UvicornWorker app.main:app --bind 0.0.0.0:$PORT --timeout 300
+

@@ -25,32 +25,34 @@ engine_kwargs = {
 }
 
 if not _is_sqlite:
-    # Ensure we use an async driver
     db_url = settings.database_url
     if db_url.startswith("postgresql://"):
         db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
 
-    # Supabase Transaction Pooler (PgBouncer) conflict resolution
-    if "pooler" in db_url:
+    # Aggressively disable prepared statements for PgBouncer compatibility (Railway/Supabase)
+    if "postgresql" in db_url:
+        engine_kwargs.update({
+            "connect_args": {
+                "statement_cache_size": 0,
+                "prepared_statement_cache_size": 0
+            }
+        })
+
+    # Supabase/Railway Transaction Pooler specific settings
+    if "pooler" in db_url or "pgbouncer" in db_url.lower():
         engine_kwargs.update({
             "poolclass": NullPool,
-            "connect_args": {
-                "prepared_statement_cache_size": 0,
-                "statement_cache_size": 0
-            },
+            # Some versions of asyncpg/sqlalchemy need this directly in execution_options
             "execution_options": {"compiled_cache": None}
         })
     else:
-        # Railway uses PgBouncer - disable prepared statements for compatibility
+        # Standard pool for direct connections, but keeping it small for memory
         engine_kwargs.update({
             "pool_pre_ping": True,
-            "pool_size": 5,  # Reduced from 10 for Railway memory limits
-            "max_overflow": 10,  # Reduced from 20
-            "connect_args": {
-                "prepared_statement_cache_size": 0,
-                "statement_cache_size": 0
-            }
+            "pool_size": 2,
+            "max_overflow": 5
         })
+
 
 engine = create_async_engine(db_url if not _is_sqlite else settings.database_url, **engine_kwargs)
 
