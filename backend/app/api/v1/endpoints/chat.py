@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form, Header
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 import openai
@@ -836,7 +837,9 @@ async def ingest_document_admin(
             text = content.decode("latin-1")
         
         rag_service = get_rag_service()
-        num_chunks = rag_service.ingest_document(
+        # Run in threadpool to enforce non-blocking execution
+        num_chunks = await run_in_threadpool(
+            rag_service.ingest_document,
             content=text,
             title=title,
             document_type=doc_type,
