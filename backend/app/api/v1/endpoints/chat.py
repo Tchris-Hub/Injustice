@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form, Header
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 import openai
@@ -799,10 +799,63 @@ async def generate_document_public(
     except Exception as e:
         logger.error(f"Document generation error: {e}", exc_info=True)
         return DocumentGenerationResponse(
-            content=f"Unable to generate {data.doc_type}. Please try again with more details.",
-            doc_type=data.doc_type,
-            warning="⚠️ Error occurred during generation. Please try again."
+            content=f"Error generating document: {e}",
+            doc_type=data.doc_type
         )
+
+
+# ---------------------------------------------
+# Admin Ingestion Endpoint
+# ---------------------------------------------
+@router.post(
+    "/admin/ingest",
+    include_in_schema=False
+)
+async def ingest_document_admin(
+    file: UploadFile = File(...),
+    title: str = Form(...),
+    doc_type: str = Form("constitution"),
+    x_admin_key: str = Header(...)
+):
+    """
+    Admin endpoint to ingest documents remotely.
+    Protected by simple shared key.
+    """
+    if x_admin_key != "secret-admin-key-2024-injustice":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, 
+            detail="Invalid admin key"
+        )
+    
+    try:
+        content = await file.read()
+        # Try decoding as utf-8, fallback to latin-1
+        try:
+            text = content.decode("utf-8")
+        except UnicodeDecodeError:
+            text = content.decode("latin-1")
+        
+        rag_service = get_rag_service()
+        num_chunks = rag_service.ingest_document(
+            content=text,
+            title=title,
+            document_type=doc_type,
+            metadata={"source": "admin_upload_remote"}
+        )
+        
+        return {
+            "success": True, 
+            "message": f"Successfully ingested {num_chunks} chunks", 
+            "document": title
+        }
+    except Exception as e:
+        logger.error(f"Ingestion failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=str(e)
+        )
+
+
 
 
 @router.post(
