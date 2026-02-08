@@ -1,0 +1,8 @@
+{
+  "status": "healthy",
+  "rag_service": "operational",
+  "vector_store": {
+    "total_documents": 1130,
+    "persist_directory": "data/chroma_db"
+  }
+}

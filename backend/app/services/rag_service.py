@@ -200,8 +200,12 @@ class RAGService:
                 temperature=0.2, # Lower temperature for more consistent analysis
                 max_tokens=8000, # Increased for deep analysis of long docs
                 timeout=120, # 2 minutes timeout for slow reasoning models
+                default_headers={
+                    "HTTP-Referer": "https://github.com/Tchris-Hub/Injustice",
+                    "X-Title": "My Rights AI Advisor",
+                }
             )
-            logger.info("✓ OpenRouter LLM initialized")
+            logger.info(f"✓ OpenRouter LLM initialized with model: {model_name}")
         except Exception as e:
             self.initialization_error = f"Failed to initialize OpenRouter LLM: {type(e).__name__}: {str(e)}"
             logger.error(self.initialization_error)
@@ -280,13 +284,23 @@ class RAGService:
         """
         last_error = None
         
+        # Safely get current model name (handle both 'model_name' and 'model' attributes)
+        current_model = getattr(self.llm, "model_name", getattr(self.llm, "model", "default-model"))
+        
         # Try the default model first, then the fallbacks
-        models_to_try = [self.llm.model] + [m for m in settings.MODEL_FALLBACKS if m != self.llm.model]
+        # Use a dict to remove duplicates while preserving order (Python 3.7+)
+        models_to_try_list = [current_model] + settings.MODEL_FALLBACKS
+        models_to_try = list(dict.fromkeys(models_to_try_list))
         
         for model_name in models_to_try:
             try:
                 # Update current model name for this attempt
-                self.llm.model = model_name
+                # Support both common attribute names for LangChain LLMs
+                if hasattr(self.llm, "model_name"):
+                    self.llm.model_name = model_name
+                if hasattr(self.llm, "model"):
+                    self.llm.model = model_name
+                
                 logger.info(f"Attempting LLM call with model: {model_name}")
                 return self.llm.invoke(messages)
             except Exception as e:
@@ -294,8 +308,8 @@ class RAGService:
                 error_str = str(e).lower()
                 
                 # If it's a rate limit or "overloaded" error, definitely try another model
-                if any(x in error_str for x in ["429", "rate limit", "overloaded", "busy", "limit exceeded"]):
-                    logger.warning(f"⚠️ Model {model_name} is rate-limited or busy. Trying fallback...")
+                if any(x in error_str for x in ["429", "rate limit", "overloaded", "busy", "limit exceeded", "insufficient_quota"]):
+                    logger.warning(f"⚠️ Model {model_name} is unavailable ({error_str}). Trying next fallback...")
                     continue
                 else:
                     # For other errors, log and try one more just in case it's model-specific
@@ -303,7 +317,7 @@ class RAGService:
                     continue
         
         # If we get here, all models failed
-        logger.error("🛑 All LLM models failed to respond.")
+        logger.error(f"🛑 All {len(models_to_try)} LLM models failed to respond.")
         raise last_error
     def ingest_document(
         self,

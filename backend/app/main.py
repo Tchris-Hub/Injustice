@@ -216,6 +216,28 @@ async def health_check():
     }
 
 
+# ---------------------------------------------
+# Android App Link Verification (Digital Asset Links)
+# ---------------------------------------------
+@app.get("/.well-known/assetlinks.json", tags=["Security"])
+async def get_assetlinks():
+    """
+    Android App Link verification.
+    This allows the app to handle URLs on this domain automatically.
+    """
+    return [{
+        "relation": ["delegate_permission/common.handle_all_urls"],
+        "target": {
+            "namespace": "android_app",
+            "package_name": "com.myrights.app",
+            "sha256_cert_fingerprints": [
+                # NOTE: Replace with your actual production SHA256 fingerprint from Google Play Console
+                "00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00:00"
+            ]
+        }
+    }]
+
+
 @app.get("/debug/env", tags=["Health"])
 async def check_env():
     """
