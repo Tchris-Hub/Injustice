@@ -118,7 +118,7 @@ async def register(
     refresh_token = RefreshToken(
         user_id=user.id,
         token_hash=refresh_hash,
-        expires_at=datetime.fromisoformat(tokens["expires_at"].replace("Z", "+00:00"))
+        expires_at=datetime.fromisoformat(tokens["refresh_expires_at"].replace("Z", "+00:00"))
     )
     db.add(refresh_token)
     
@@ -193,7 +193,7 @@ async def login(
     refresh_token = RefreshToken(
         user_id=user.id,
         token_hash=refresh_hash,
-        expires_at=datetime.fromisoformat(tokens["expires_at"].replace("Z", "+00:00"))
+        expires_at=datetime.fromisoformat(tokens["refresh_expires_at"].replace("Z", "+00:00"))
     )
     db.add(refresh_token)
     
@@ -266,7 +266,7 @@ async def refresh_token(
     new_refresh_token = RefreshToken(
         user_id=user_id,
         token_hash=new_refresh_hash,
-        expires_at=datetime.fromisoformat(tokens["expires_at"].replace("Z", "+00:00"))
+        expires_at=datetime.fromisoformat(tokens["refresh_expires_at"].replace("Z", "+00:00"))
     )
     db.add(new_refresh_token)
     

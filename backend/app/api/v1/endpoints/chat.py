@@ -142,137 +142,176 @@ async def send_message(
     3. Provide clear, cited information
     4. Suggest practical next steps
     """
-    rag_service = get_rag_service()
-    
-    # Get or create conversation (skip DB if suppressed)
-    conversation = None
-    if data.conversation_id:
-        result = await db.execute(
-            select(Conversation).where(
-                Conversation.id == data.conversation_id,
-                Conversation.user_id == current_user.id
+    try:
+        rag_service = get_rag_service()
+        
+        # Get or create conversation (skip DB if suppressed)
+        conversation = None
+        if data.conversation_id:
+            result = await db.execute(
+                select(Conversation).where(
+                    Conversation.id == data.conversation_id,
+                    Conversation.user_id == current_user.id
+                )
             )
-        )
-        conversation = result.scalar_one_or_none()
-        if not conversation:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Conversation not found"
+            conversation = result.scalar_one_or_none()
+            if not conversation:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Conversation not found"
+                )
+        elif not data.suppress_storage:
+            # Create new conversation only if storage is NOT suppressed
+            conversation = Conversation(
+                user_id=current_user.id,
+                title=data.content[:50] + "..." if len(data.content) > 50 else data.content
             )
-    elif not data.suppress_storage:
-        # Create new conversation only if storage is NOT suppressed
-        conversation = Conversation(
-            user_id=current_user.id,
-            title=data.content[:50] + "..." if len(data.content) > 50 else data.content
+            db.add(conversation)
+            await db.flush()
+        
+        # Save user message only if NOT suppressed
+        if not data.suppress_storage and conversation:
+            user_message = Message(
+                conversation_id=conversation.id,
+                role="user",
+                content=encrypt_text(data.content)
+            )
+            db.add(user_message)
+            await db.flush()
+        
+        # Assess risk level
+        risk_assessment = rag_service.assess_risk(data.content)
+        if conversation:
+            conversation.risk_level = risk_assessment.get("risk_level", "medium")
+            conversation.legal_topic = risk_assessment.get("legal_topic", "general_info")
+        
+        # Get conversation history
+        history = []
+        if conversation:
+            history_result = await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(Message.created_at.desc())
+                .limit(10)
+            )
+            history = [
+                {"role": msg.role, "content": decrypt_text(msg.content)}
+                for msg in reversed(history_result.scalars().all())
+            ]
+        
+        # Generate AI response
+        ai_result = rag_service.generate_response(
+            user_message=data.content,
+            conversation_history=history[:-1] if history else []
         )
-        db.add(conversation)
-        await db.flush()
-    
-    # Save user message only if NOT suppressed
-    if not data.suppress_storage and conversation:
-        user_message = Message(
-            conversation_id=conversation.id,
-            role="user",
-            content=encrypt_text(data.content)
-        )
-        db.add(user_message)
-        await db.flush()
-    
-    # Assess risk level
-    risk_assessment = rag_service.assess_risk(data.content)
-    if conversation:
-        conversation.risk_level = risk_assessment.get("risk_level", "medium")
-        conversation.legal_topic = risk_assessment.get("legal_topic", "general_info")
-    
-    # Get conversation history
-    history = []
-    if conversation:
-        history_result = await db.execute(
-            select(Message)
-            .where(Message.conversation_id == conversation.id)
-            .order_by(Message.created_at.desc())
-            .limit(10)
-        )
-        history = [
-            {"role": msg.role, "content": decrypt_text(msg.content)}
-            for msg in reversed(history_result.scalars().all())
-        ]
-    
-    # Generate AI response
-    ai_result = rag_service.generate_response(
-        user_message=data.content,
-        conversation_history=history[:-1] if history else []
-    )
-    
-    # Save AI response only if NOT suppressed
-    ai_message_id = str(uuid.uuid4())
-    ai_created_at = datetime.now(timezone.utc)
-    
-    if not data.suppress_storage and conversation:
-        ai_message = Message(
-            conversation_id=conversation.id,
+        
+        # Save AI response only if NOT suppressed
+        ai_message_id = str(uuid.uuid4())
+        ai_created_at = datetime.now(timezone.utc)
+        
+        if not data.suppress_storage and conversation:
+            ai_message = Message(
+                conversation_id=conversation.id,
+                role="assistant",
+                content=encrypt_text(ai_result["content"]),
+                sources=ai_result.get("sources"),
+                model_version=ai_result.get("model_version"),
+                confidence_score=ai_result.get("confidence_score"),
+                contains_disclaimer=True
+            )
+            db.add(ai_message)
+            await db.flush()
+            ai_message_id = str(ai_message.id)
+            ai_created_at = ai_message.created_at or ai_created_at
+            conversation.updated_at = datetime.now(timezone.utc)
+        
+        # Check for escalation
+        escalation_needed = bool(risk_assessment.get("escalation_needed", False))
+        if escalation_needed:
+            auto_reason = (
+                risk_assessment.get("escalation_reason")
+                or "Conversation flagged as high risk by automated assessment."
+            )
+            auto_urgency = risk_assessment.get("urgency") or conversation.risk_level or "medium"
+            case = _upsert_escalation_case(
+                conversation,
+                db=db,
+                target_state=EscalationState.pending_review,
+                note=auto_reason,
+                trigger_source="risk_engine",
+                reason=auto_reason,
+                urgency=auto_urgency,
+                contact_preference="either",
+                actor_user_id=None,
+            )
+            logger.warning(
+                "High-risk conversation escalated: conversation=%s case=%s risk=%s",
+                conversation.id,
+                case.id,
+                conversation.risk_level,
+            )
+        
+        # Build response with safer source mapping
+        sources = []
+        for s in ai_result.get("sources", []):
+            try:
+                if isinstance(s, dict):
+                    sources.append(SourceCitation(**s))
+                else:
+                    logger.warning(f"Skipping non-dict source: {s}")
+            except Exception as se:
+                logger.warning(f"Skipping malformed source citation: {se}")
+        
+        message_response = MessageResponse(
+            id=ai_message_id,
+            conversation_id=str(conversation.id) if conversation else "incognito",
             role="assistant",
-            content=encrypt_text(ai_result["content"]),
-            sources=ai_result.get("sources"),
-            model_version=ai_result.get("model_version"),
+            content=ai_result["content"],
+            sources=sources,
             confidence_score=ai_result.get("confidence_score"),
-            contains_disclaimer=True
+            created_at=ai_created_at
         )
-        db.add(ai_message)
-        await db.flush()
-        ai_message_id = str(ai_message.id)
-        ai_created_at = ai_message.created_at or ai_created_at
-        conversation.updated_at = datetime.now(timezone.utc)
-    
-    # Check for escalation
-    escalation_needed = bool(risk_assessment.get("escalation_needed", False))
-    if escalation_needed:
-        auto_reason = (
-            risk_assessment.get("escalation_reason")
-            or "Conversation flagged as high risk by automated assessment."
+        
+        return AIResponse(
+            message=message_response,
+            conversation_id=str(conversation.id) if conversation else "incognito",
+            conversation_title=conversation.title if conversation else "Incognito Chat",
+            risk_level=conversation.risk_level if conversation else risk_assessment.get("risk_level"),
+            escalation_recommended=escalation_needed,
+            disclaimer=LEGAL_DISCLAIMER
         )
-        auto_urgency = risk_assessment.get("urgency") or conversation.risk_level or "medium"
-        case = _upsert_escalation_case(
-            conversation,
-            db=db,
-            target_state=EscalationState.pending_review,
-            note=auto_reason,
-            trigger_source="risk_engine",
-            reason=auto_reason,
-            urgency=auto_urgency,
-            contact_preference="either",
-            actor_user_id=None,
+    except Exception as e:
+        logger.error(f"Chat error in authenticated endpoint: {e}", exc_info=True)
+        # Return a valid AIResponse but with error content to avoid 500
+        fail_id = str(uuid.uuid4())
+        fail_time = datetime.now(timezone.utc)
+        
+        error_msg = (
+            "I apologize, but I encountered an internal error. "
+            "This could be due to a technical glitch. Please try again or "
+            "contact support if this persists."
         )
-        logger.warning(
-            "High-risk conversation escalated: conversation=%s case=%s risk=%s",
-            conversation.id,
-            case.id,
-            conversation.risk_level,
+        
+        # In debug mode, provide more info
+        if settings.debug:
+            error_msg += f"\n\n[DEBUG]: {str(e)}"
+
+        return AIResponse(
+            message=MessageResponse(
+                id=fail_id,
+                conversation_id=str(conversation.id) if conversation else "error",
+                role="assistant",
+                content=error_msg,
+                sources=[],
+                confidence_score="low",
+                created_at=fail_time
+            ),
+            conversation_id=str(conversation.id) if conversation else "error",
+            conversation_title="Error",
+            risk_level="high",
+            escalation_recommended=False,
+            disclaimer=LEGAL_DISCLAIMER
         )
-    
-    # Build response
-    sources = [
-        SourceCitation(**s) for s in ai_result.get("sources", [])
-    ]
-    
-    message_response = MessageResponse(
-        id=ai_message_id,
-        conversation_id=str(conversation.id) if conversation else "incognito",
-        role="assistant",
-        content=ai_result["content"],
-        sources=sources,
-        confidence_score=ai_result.get("confidence_score"),
-        created_at=ai_created_at
-    )
-    
-    return AIResponse(
-        message=message_response,
-        conversation_id=str(conversation.id) if conversation else "incognito",
-        conversation_title=conversation.title if conversation else "Incognito Chat",
-        risk_level=conversation.risk_level if conversation else risk_assessment.get("risk_level"),
-        escalation_recommended=escalation_needed,
-        disclaimer=LEGAL_DISCLAIMER
-    )
 
 
 # ---------------------------------------------

@@ -151,7 +151,8 @@ def create_tokens(user_id: str) -> dict:
         "access_token": access_token,
         "refresh_token": refresh_token,
         "token_type": "bearer",
-        "expires_at": access_expires.isoformat()
+        "expires_at": access_expires.isoformat(),
+        "refresh_expires_at": refresh_expires.isoformat()
     }
 
 
