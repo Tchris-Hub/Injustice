@@ -5,14 +5,30 @@ Handles password hashing (Argon2) and JWT token management.
 Implements industry-standard security practices.
 """
 
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 import jwt
-from jwt import PyJWTError
+from jwt import PyJWTError, PyJWKClient
 from passlib.context import CryptContext
 from pydantic import BaseModel
 
 from app.core.config import settings
+
+logger = logging.getLogger(__name__)
+
+# Supabase JWKS endpoint for ES256 token verification
+# This is the public key endpoint that allows us to verify Supabase-issued JWTs
+SUPABASE_PROJECT_REF = "fdjltnfkmskeqtiaqlou"
+SUPABASE_JWKS_URL = f"https://{SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json"
+_jwks_client: Optional[PyJWKClient] = None
+
+def get_jwks_client() -> PyJWKClient:
+    """Get or create a cached JWKS client for Supabase token verification."""
+    global _jwks_client
+    if _jwks_client is None:
+        _jwks_client = PyJWKClient(SUPABASE_JWKS_URL, cache_keys=True)
+    return _jwks_client
 
 
 # ---------------------------------------------
@@ -186,21 +202,19 @@ def decode_token(token: str) -> Optional[TokenData]:
         return TokenData(user_id=user_id, token_type=token_type)
         
     except PyJWTError as backend_err:
-        # 2. Bridge: Try decoding with SUPABASE_JWT_SECRET
-        # This allows the backend to accept tokens issued directly by Supabase (e.g. Google Sign-In)
+        # 2. Bridge: Try decoding with Supabase JWKS (ES256)
+        # Supabase uses ES256 asymmetric signing — we verify using the public key
+        # fetched from their JWKS endpoint.
         logger.debug(f"Backend JWT decode failed: {type(backend_err).__name__}: {backend_err}")
-        
-        if not settings.supabase_jwt_secret:
-            logger.warning("SUPABASE_JWT_SECRET is not set — cannot bridge Supabase tokens")
-            return None
 
         try:
-            # Supabase tokens are standard JWTs with 'aud': 'authenticated'
-            # We verify the signature using the Supabase project secret
+            jwks_client = get_jwks_client()
+            signing_key = jwks_client.get_signing_key_from_jwt(token)
+            
             payload = jwt.decode(
                 token,
-                settings.supabase_jwt_secret,
-                algorithms=["HS256"],
+                signing_key.key,
+                algorithms=["ES256"],
                 audience="authenticated"
             )
             
@@ -213,7 +227,7 @@ def decode_token(token: str) -> Optional[TokenData]:
             # Treat Supabase session tokens as valid access tokens
             return TokenData(user_id=user_id, token_type="access")
             
-        except PyJWTError as supa_err:
+        except Exception as supa_err:
             logger.warning(f"Supabase JWT bridge FAILED: {type(supa_err).__name__}: {supa_err}")
             return None
 
