@@ -185,10 +185,13 @@ def decode_token(token: str) -> Optional[TokenData]:
             
         return TokenData(user_id=user_id, token_type=token_type)
         
-    except PyJWTError:
+    except PyJWTError as backend_err:
         # 2. Bridge: Try decoding with SUPABASE_JWT_SECRET
         # This allows the backend to accept tokens issued directly by Supabase (e.g. Google Sign-In)
+        logger.debug(f"Backend JWT decode failed: {type(backend_err).__name__}: {backend_err}")
+        
         if not settings.supabase_jwt_secret:
+            logger.warning("SUPABASE_JWT_SECRET is not set — cannot bridge Supabase tokens")
             return None
 
         try:
@@ -203,12 +206,15 @@ def decode_token(token: str) -> Optional[TokenData]:
             
             user_id: str = payload.get("sub")
             if user_id is None:
+                logger.warning("Supabase token decoded but has no 'sub' claim")
                 return None
                 
+            logger.info(f"✓ Supabase JWT bridge: accepted token for user {user_id[:8]}...")
             # Treat Supabase session tokens as valid access tokens
             return TokenData(user_id=user_id, token_type="access")
             
-        except PyJWTError:
+        except PyJWTError as supa_err:
+            logger.warning(f"Supabase JWT bridge FAILED: {type(supa_err).__name__}: {supa_err}")
             return None
 
 
