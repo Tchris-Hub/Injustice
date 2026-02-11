@@ -251,11 +251,12 @@ async def check_env():
         "MODEL_NAME": os.getenv("MODEL_NAME", "NOT SET (Using Gemini Flash Default)"),
         "DATABASE_URL": "SET ✅" if os.getenv("DATABASE_URL") else "MISSING ❌",
         "BACKEND_JWT_SECRET": "SET ✅" if os.getenv("BACKEND_JWT_SECRET") else "MISSING ❌ (SECURITY RISK)",
-        "ENVIRONMENT": os.getenv("ENVIRONMENT", "NOT SET"),
+        "SUPABASE_JWT_SECRET": "SET ✅" if os.getenv("SUPABASE_JWT_SECRET") else "MISSING ❌ (Google Sign-In will fail!)",
+        "ENVIRONMENT": os.getenv("ENVIRONMENT", "NOT SET (defaults to development)"),
     }
     
     health_score = sum(1 for v in status.values() if "SET ✅" in str(v))
-    total_needed = 4 # Base keys
+    total_needed = 5 # Base keys
     
     return {
         "summary": "CRITICAL CONFIGURATION MISSING!" if status["BACKEND_JWT_SECRET"] == "MISSING ❌ (SECURITY RISK)" else "Configuration looks good",
