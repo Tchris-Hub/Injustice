@@ -108,8 +108,8 @@ class Settings(BaseSettings):
     
     @property
     def is_production(self) -> bool:
-        """Check if running in production mode."""
-        return self.environment.lower() == "production"
+        """Check if running in production mode (robust to whitespace)."""
+        return self.environment.lower().strip() == "production"
 
     def validate_production(self) -> None:
         """Raise on dangerous defaults in production."""
