@@ -69,13 +69,14 @@ class Settings(BaseSettings):
     app_name: str = "AI Legal Advisor"
     app_version: str = "1.0.0"
     environment: str = "development"
-    debug: bool = True
+    debug: bool = False  # SAFE DEFAULT: Off in production
     
     # Database (SQLite for local dev, PostgreSQL for production)
     database_url: str = "sqlite+aiosqlite:///./data/injustice.db"
     
     # Authentication
-    secret_key: str = "change-me-in-production"
+    backend_jwt_secret: str = ""  # Internal backend secret (renamed from SECRET_KEY)
+    supabase_jwt_secret: str = ""  # Supabase project JWT secret
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
@@ -94,7 +95,7 @@ class Settings(BaseSettings):
     
     # CORS
     # In development, we allow all for mobile testing. In prod, lock this down.
-    allowed_origins: str = "*"
+    allowed_origins: str = "https://injustice-production.up.railway.app"
     
     # Legal Safety
     jurisdiction: str = "Nigeria"
@@ -109,6 +110,14 @@ class Settings(BaseSettings):
     def is_production(self) -> bool:
         """Check if running in production mode."""
         return self.environment.lower() == "production"
+
+    def validate_production(self) -> None:
+        """Raise on dangerous defaults in production."""
+        if self.is_production and not self.backend_jwt_secret:
+            raise ValueError(
+                "BACKEND_JWT_SECRET env var is required in production. "
+                "Generate one with: python -c \"import secrets; print(secrets.token_hex(32))\""
+            )
 
 
 @lru_cache()

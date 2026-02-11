@@ -97,7 +97,7 @@ def create_access_token(user_id: str) -> Tuple[str, datetime]:
     
     token = jwt.encode(
         payload,
-        settings.secret_key,
+        settings.backend_jwt_secret,
         algorithm=settings.algorithm
     )
     
@@ -127,7 +127,7 @@ def create_refresh_token(user_id: str) -> Tuple[str, datetime]:
     
     token = jwt.encode(
         payload,
-        settings.secret_key,
+        settings.backend_jwt_secret,
         algorithm=settings.algorithm
     )
     
@@ -170,9 +170,10 @@ def decode_token(token: str) -> Optional[TokenData]:
         TokenData if valid, None if invalid/expired
     """
     try:
+        # 1. Try decoding with our BACKEND_JWT_SECRET
         payload = jwt.decode(
             token,
-            settings.secret_key,
+            settings.backend_jwt_secret,
             algorithms=[settings.algorithm]
         )
         
@@ -185,7 +186,30 @@ def decode_token(token: str) -> Optional[TokenData]:
         return TokenData(user_id=user_id, token_type=token_type)
         
     except PyJWTError:
-        return None
+        # 2. Bridge: Try decoding with SUPABASE_JWT_SECRET
+        # This allows the backend to accept tokens issued directly by Supabase (e.g. Google Sign-In)
+        if not settings.supabase_jwt_secret:
+            return None
+
+        try:
+            # Supabase tokens are standard JWTs with 'aud': 'authenticated'
+            # We verify the signature using the Supabase project secret
+            payload = jwt.decode(
+                token,
+                settings.supabase_jwt_secret,
+                algorithms=["HS256"],
+                audience="authenticated"
+            )
+            
+            user_id: str = payload.get("sub")
+            if user_id is None:
+                return None
+                
+            # Treat Supabase session tokens as valid access tokens
+            return TokenData(user_id=user_id, token_type="access")
+            
+        except PyJWTError:
+            return None
 
 
 def verify_access_token(token: str) -> Optional[str]:

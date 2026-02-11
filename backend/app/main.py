@@ -250,7 +250,7 @@ async def check_env():
         "OPENROUTER_API_KEY": "SET ✅" if os.getenv("OPENROUTER_API_KEY") else "MISSING ❌",
         "MODEL_NAME": os.getenv("MODEL_NAME", "NOT SET (Using Gemini Flash Default)"),
         "DATABASE_URL": "SET ✅" if os.getenv("DATABASE_URL") else "MISSING ❌",
-        "SECRET_KEY": "SET ✅" if os.getenv("SECRET_KEY") else "MISSING ❌ (SECURITY RISK)",
+        "BACKEND_JWT_SECRET": "SET ✅" if os.getenv("BACKEND_JWT_SECRET") else "MISSING ❌ (SECURITY RISK)",
         "ENVIRONMENT": os.getenv("ENVIRONMENT", "NOT SET"),
     }
     
@@ -258,35 +258,15 @@ async def check_env():
     total_needed = 4 # Base keys
     
     return {
-        "summary": "CRITICAL CONFIGURATION MISSING!" if status["SECRET_KEY"] == "MISSING ❌ (SECURITY RISK)" else "Configuration looks good",
+        "summary": "CRITICAL CONFIGURATION MISSING!" if status["BACKEND_JWT_SECRET"] == "MISSING ❌ (SECURITY RISK)" else "Configuration looks good",
         "variable_status": status,
         "health_score": f"{health_score}/{total_needed}",
         "advice": [
-            "Add SECRET_KEY to Railway variables if it shows MISSING." if "MISSING" in status["SECRET_KEY"] else None,
+            "Add BACKEND_JWT_SECRET to Railway variables if it shows MISSING." if "MISSING" in status["BACKEND_JWT_SECRET"] else None,
             "Ensure MODEL_NAME is a valid OpenRouter slug (e.g. google/gemini-2.0-flash-exp:free)." if "NOT SET" in status["MODEL_NAME"] else None
         ],
         "is_production": settings.is_production
     }
-
-
-# ---------------------------------------------
-# Global Exception Handler
-# ---------------------------------------------
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """
-    Catch-all exception handler.
-    Logs errors and returns a safe response.
-    """
-    logger.error(f"Unhandled exception: {exc}", exc_info=True)
-    
-    return JSONResponse(
-        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={
-            "detail": "An internal error occurred. Please try again later.",
-            "support": "If this persists, please contact support."
-        }
-    )
 
 
 # ---------------------------------------------

@@ -4,9 +4,12 @@ from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from app.core.config import settings
 
-def _get_fernet() -> Fernet:
-    """Initialize Fernet with a key derived from SECRET_KEY."""
-    password = settings.secret_key.encode()
+
+def get_cipher_suite():
+    """Get the Fernet cipher suite using the app secret key."""
+    # Use the backend JWT secret as the encryption key basis
+    # Ensure it's 32 bytes URL-safe base64 encoded
+    password = settings.backend_jwt_secret.encode()
     salt = b'injustice-salt-2024'  # In production, this should be unique and stored
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),

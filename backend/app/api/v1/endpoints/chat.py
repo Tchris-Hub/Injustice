@@ -47,6 +47,7 @@ from app.schemas.chat import (
 from app.api.deps import get_current_user
 from app.services.rag_service import get_rag_service
 from app.core.crypto import encrypt_text, decrypt_text
+from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -797,14 +798,22 @@ async def analyze_document_authenticated(
     Authenticated version of document analysis.
     Uses user context and logs the request to the database.
     """
-    # ... placeholder for implementation ...
-    # For now, just call the public logic but log it
     try:
         rag_service = get_rag_service()
-        # In the future, we can personalize this based on current_user
-        return await analyze_document_public(data)
+        
+        # Personalized Context
+        user_context = f"USER PROFILE:\nName: {current_user.full_name or 'Unknown'}\nEmail: {current_user.email}\n"
+        enhanced_text = f"{user_context}\nDOCUMENT FOR ANALYSIS:\n{data.document_text}"
+        
+        # Analyze with personalized context
+        result = await run_in_threadpool(
+            rag_service.analyze_document,
+            document_text=enhanced_text
+        )
+        
+        return DocumentAnalysisResponse(**result)
     except Exception as e:
-        logger.error(f"Auth Document analysis error: {e}")
+        logger.error(f"Auth Document analysis error: {e}", exc_info=True)
         return await analyze_document_public(data)
 
 
@@ -861,7 +870,9 @@ async def ingest_document_admin(
     Admin endpoint to ingest documents remotely.
     Protected by simple shared key.
     """
-    if x_admin_key != "secret-admin-key-2024-injustice":
+    expected_key = os.getenv("ADMIN_INGEST_KEY", "")
+    if not expected_key or x_admin_key != expected_key:
+        logger.warning("Admin ingest attempt with invalid key from %s", request.client.host if hasattr(request, 'client') and request.client else 'unknown')
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="Invalid admin key"
@@ -885,6 +896,10 @@ async def ingest_document_admin(
             metadata={"source": "admin_upload_remote"}
         )
         
+        logger.info(
+            "Admin document ingested: title=%s type=%s chunks=%d",
+            title, doc_type, num_chunks
+        )
         return {
             "success": True, 
             "message": f"Successfully ingested {num_chunks} chunks", 
