@@ -31,6 +31,9 @@ from app.schemas.auth import (
 )
 from app.api.deps import get_current_user
 
+from app.api.deps import get_current_user
+from app.main import limiter
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -75,9 +78,10 @@ def hash_token(token: str) -> str:
     status_code=status.HTTP_201_CREATED,
     summary="Register a new user"
 )
+@limiter.limit("5/minute")
 async def register(
-    data: UserRegister,
     request: Request,
+    data: UserRegister,
     db: AsyncSession = Depends(get_db)
 ):
     """
@@ -146,9 +150,10 @@ async def register(
     response_model=TokenResponse,
     summary="Login with email and password"
 )
+@limiter.limit("10/minute")
 async def login(
-    data: UserLogin,
     request: Request,
+    data: UserLogin,
     db: AsyncSession = Depends(get_db)
 ):
     """

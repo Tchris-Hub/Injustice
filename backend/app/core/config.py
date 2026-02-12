@@ -37,11 +37,12 @@ class Settings(BaseSettings):
     
     # Free model fallbacks for high reliability during presentations
     MODEL_FALLBACKS: List[str] = [
-        "google/gemini-2.0-flash-exp:free",
-        "google/gemini-2.0-pro-exp-02-05:free",
-        "deepseek/deepseek-chat:free",
-        "mistralai/mistral-7b-instruct:free",
-        "openchat/openchat-7b:free"
+        "google/gemini-2.0-flash-001",
+        "google/gemini-2.0-flash-lite-001",
+        "google/gemini-flash-1.5",
+        "google/gemini-flash-1.5-exp",
+        "anthropic/claude-3-haiku",
+        "openrouter/auto"
     ]
 
 

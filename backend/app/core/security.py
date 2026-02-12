@@ -215,7 +215,8 @@ def decode_token(token: str) -> Optional[TokenData]:
                 token,
                 signing_key.key,
                 algorithms=["ES256"],
-                audience="authenticated"
+                # Some providers/configs might use 'authenticated' or the project ref as audience
+                audience=["authenticated", SUPABASE_PROJECT_REF]
             )
             
             user_id: str = payload.get("sub")

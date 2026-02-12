@@ -48,6 +48,7 @@ from app.api.deps import get_current_user
 from app.services.rag_service import get_rag_service
 from app.core.crypto import encrypt_text, decrypt_text
 from app.core.config import settings
+from app.main import limiter
 
 logger = logging.getLogger(__name__)
 
@@ -126,7 +127,9 @@ def _upsert_escalation_case(
     response_model=AIResponse,
     summary="Send a message and get AI response"
 )
+@limiter.limit("10/minute")
 async def send_message(
+    request: Request,
     data: MessageCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -143,11 +146,11 @@ async def send_message(
     3. Provide clear, cited information
     4. Suggest practical next steps
     """
+    # Get or create conversation (skip DB if suppressed)
+    conversation = None
     try:
         rag_service = get_rag_service()
         
-        # Get or create conversation (skip DB if suppressed)
-        conversation = None
         if data.conversation_id:
             result = await db.execute(
                 select(Conversation).where(
@@ -638,7 +641,9 @@ async def chat_health():
     summary="Send a message (public/demo)",
     description="Public endpoint for chat - no authentication required."
 )
+@limiter.limit("10/minute")
 async def send_message_public(
+    request: Request,
     data: PublicChatRequest
 ):
     """

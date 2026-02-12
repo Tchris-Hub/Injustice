@@ -302,14 +302,21 @@ class RAGService:
                     self.llm.model = model_name
                 
                 logger.info(f"Attempting LLM call with model: {model_name}")
-                return self.llm.invoke(messages)
+                response = self.llm.invoke(messages)
+                
+                # Check for empty response content
+                if not response or not response.content or not response.content.strip():
+                    logger.warning(f"⚠️ Model {model_name} returned an empty response. Trying fallback...")
+                    continue
+                    
+                return response
             except Exception as e:
                 last_error = e
                 error_str = str(e).lower()
                 
-                # If it's a rate limit or "overloaded" error, definitely try another model
-                if any(x in error_str for x in ["429", "rate limit", "overloaded", "busy", "limit exceeded", "insufficient_quota"]):
-                    logger.warning(f"⚠️ Model {model_name} is unavailable ({error_str}). Trying next fallback...")
+                # If it's a rate limit, overloaded, OR 404, definitely try another model
+                if any(x in error_str for x in ["429", "rate limit", "overloaded", "busy", "limit exceeded", "insufficient_quota", "404", "not found"]):
+                    logger.warning(f"⚠️ Model {model_name} is unavailable or not found ({error_str}). Trying next fallback...")
                     continue
                 else:
                     # For other errors, log and try one more just in case it's model-specific
