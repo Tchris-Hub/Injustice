@@ -32,7 +32,7 @@ from app.schemas.auth import (
 from app.api.deps import get_current_user
 
 from app.api.deps import get_current_user
-from app.main import limiter
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 

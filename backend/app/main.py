@@ -16,6 +16,7 @@ from slowapi.util import get_remote_address
 from slowapi.errors import RateLimitExceeded
 
 from app.core.config import settings
+from app.core.rate_limit import limiter
 from app.db.session import init_db, close_db
 from app.api.v1.router import api_v1_router
 from app.services.rag_service import get_rag_service
@@ -29,12 +30,6 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------
-# Rate Limiter
-# ---------------------------------------------
-limiter = Limiter(key_func=get_remote_address)
 
 
 # ---------------------------------------------

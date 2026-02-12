@@ -48,7 +48,7 @@ from app.api.deps import get_current_user
 from app.services.rag_service import get_rag_service
 from app.core.crypto import encrypt_text, decrypt_text
 from app.core.config import settings
-from app.main import limiter
+from app.core.rate_limit import limiter
 
 logger = logging.getLogger(__name__)
 
