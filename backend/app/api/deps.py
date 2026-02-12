@@ -84,25 +84,10 @@ async def get_current_user(
         existing_user = result.scalar_one_or_none()
 
         if existing_user:
-            logger.info(f"Linking existing user {email} to new Supabase ID {user_id[:8]}...")
-            # We must be careful about updating the PK, but since we're using UUIDs 
-            # and Supabase is now the source of truth, this is the most seamless transition.
-            # If this fails due to FKs without ON UPDATE CASCADE, we'll see it in logs.
-            try:
-                # Use a raw update to bypass some SQLAlchemy PK change protections if needed
-                from sqlalchemy import update
-                await db.execute(
-                    update(User).where(User.email == email).values(id=user_uuid)
-                )
-                await db.flush()
-                # Re-fetch the user with the new ID
-                result = await db.execute(select(User).where(User.id == user_uuid))
-                user = result.scalar_one()
-                logger.info(f"✓ Successfully linked {email}")
-            except Exception as e:
-                logger.error(f"Failed to link user ID: {e}")
-                # Fallback: just use the existing user for this session
-                user = existing_user
+            logger.info(f"Linking Supabase login to existing backend user: {email}")
+            # We don't update the ID to avoid IntegrityErrors with Foreign Keys.
+            # We just use this existing record for the session.
+            user = existing_user
         else:
             logger.info(f"Auto-provisioning NEW backend user for {email}...")
             user = User(
