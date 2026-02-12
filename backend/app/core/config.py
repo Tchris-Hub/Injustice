@@ -30,7 +30,7 @@ class Settings(BaseSettings):
         return self.OPENROUTER_BASE_URL
     
     # Model Configuration
-    MODEL_NAME: str = "google/gemini-2.0-flash-exp:free"
+    MODEL_NAME: str = "google/gemini-2.0-flash-001"
     MODEL_CHAT: str = ""
     MODEL_ANALYSIS: str = ""
     MODEL_GENERATION: str = ""
