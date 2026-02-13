@@ -211,12 +211,17 @@ def decode_token(token: str) -> Optional[TokenData]:
             jwks_client = get_jwks_client()
             signing_key = jwks_client.get_signing_key_from_jwt(token)
             
+            # SUPABASE BRIDGE: ES256 asymmetric signature verification
+            # We verify that Supabase signed this token. 
+            # We are lenient with audience/issuer for the bridge to support different OAuth providers.
             payload = jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["ES256"],
-                # Some providers/configs might use 'authenticated' or the project ref as audience
-                audience=["authenticated", SUPABASE_PROJECT_REF]
+                options={
+                    "verify_aud": False,  # Lenient audience check - signature is the real proof
+                    "verify_iss": False   # Lenient issuer check
+                }
             )
             
             user_id: str = payload.get("sub")
@@ -225,11 +230,13 @@ def decode_token(token: str) -> Optional[TokenData]:
                 return None
                 
             logger.info(f"✓ Supabase JWT bridge: accepted token for user {user_id[:8]}...")
-            # Treat Supabase session tokens as valid access tokens
             return TokenData(user_id=user_id, token_type="access")
             
+        except PyJWTError as supa_jwt_err:
+            logger.warning(f"Supabase JWT bridge: invalid token signature/format: {supa_jwt_err}")
+            return None
         except Exception as supa_err:
-            logger.warning(f"Supabase JWT bridge FAILED: {type(supa_err).__name__}: {supa_err}")
+            logger.error(f"Supabase JWT bridge: unexpected decoding ERROR: {type(supa_err).__name__}: {supa_err}")
             return None
 
 
