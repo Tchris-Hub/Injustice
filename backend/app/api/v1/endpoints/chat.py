@@ -292,8 +292,8 @@ async def send_message(
         
         error_msg = (
             "I apologize, but I encountered an internal error. "
-            "This could be due to a technical glitch. Please try again or "
-            "contact support if this persists."
+            "This is usually due to a temporary issue with the AI provider (OpenRouter) or an invalid API key configuration. "
+            f"Failure ID: {fail_id}. Please try again in a moment or contact support if this persists."
         )
         
         # In debug mode, provide more info
