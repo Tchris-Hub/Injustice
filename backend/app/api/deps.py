@@ -85,23 +85,43 @@ async def get_current_user(
 
         if existing_user:
             logger.info(f"Linking Supabase login to existing backend user: {email}")
-            # We don't update the ID to avoid IntegrityErrors with Foreign Keys.
-            # We just use this existing record for the session.
             user = existing_user
         else:
             logger.info(f"Auto-provisioning NEW backend user for {email}...")
-            user = User(
-                id=user_uuid,
-                email=email,
-                hashed_password="SUPABASE_OAUTH_USER",  # No password - OAuth only
-                full_name=full_name,
-                is_active=True,
-                is_verified=True,
-                has_accepted_terms=False,
-            )
-            db.add(user)
-            await db.flush()
-            logger.info(f"✓ Auto-provisioned NEW user {email}")
+            try:
+                # Use a subtransaction (savepoint) to handle potential race condition
+                async with db.begin_nested():
+                    user = User(
+                        id=user_uuid,
+                        email=email,
+                        hashed_password="SUPABASE_OAUTH_USER",
+                        full_name=full_name,
+                        is_active=True,
+                        is_verified=True,
+                        has_accepted_terms=False,
+                    )
+                    db.add(user)
+                    await db.flush()
+                logger.info(f"✓ Auto-provisioned NEW user {email}")
+            except Exception as e:
+                # If another request won the race, fetch that user
+                logger.warning(f"Provisioning race detected or conflict for {email}: {e}")
+                result = await db.execute(
+                    select(User).where(User.id == user_uuid)
+                )
+                user = result.scalar_one_or_none()
+                if not user:
+                    # Retry by email as second fallback
+                    result = await db.execute(
+                        select(User).where(User.email == email)
+                    )
+                    user = result.scalar_one_or_none()
+                
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                        detail="Failed to provision user account"
+                    )
     
     if not user.is_active:
         raise HTTPException(
