@@ -12,7 +12,7 @@ import os
 from datetime import datetime, timezone
 from typing import List, Optional, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form, Header, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form, Header, Request, BackgroundTasks
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
@@ -49,6 +49,7 @@ from app.services.rag_service import get_rag_service
 from app.core.crypto import encrypt_text, decrypt_text
 from app.core.config import settings
 from app.core.rate_limit import limiter
+from app.services.audit_service import audit_service
 
 logger = logging.getLogger(__name__)
 
@@ -131,21 +132,22 @@ def _upsert_escalation_case(
 async def send_message(
     request: Request,
     data: MessageCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """
     Send a message to the AI Legal Advisor and receive a response.
-    
-    - **content**: Your question or message
-    - **conversation_id**: (Optional) ID of existing conversation, or null for new
-    
-    The AI will:
-    1. Acknowledge your situation with empathy
-    2. Retrieve relevant sections from Nigerian law
-    3. Provide clear, cited information
-    4. Suggest practical next steps
     """
+    # Trigger background audit
+    background_tasks.add_task(
+        audit_service.audit_query,
+        query=data.content,
+        user_id=current_user.id,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent")
+    )
+    
     # Get or create conversation (skip DB if suppressed)
     conversation = None
     try:
@@ -644,12 +646,22 @@ async def chat_health():
 @limiter.limit("10/minute")
 async def send_message_public(
     request: Request,
-    data: PublicChatRequest
+    data: PublicChatRequest,
+    background_tasks: BackgroundTasks
 ):
     """
     Send a message to the AI Legal Advisor.
     This is a simplified public endpoint for demo purposes.
     """
+    # Trigger background audit
+    background_tasks.add_task(
+        audit_service.audit_query,
+        query=data.message,
+        user_id=None,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent")
+    )
+    
     try:
         # Zero-Trace Scrubbing: Explicitly avoid logging any user-identifying info
         rag_service = get_rag_service()

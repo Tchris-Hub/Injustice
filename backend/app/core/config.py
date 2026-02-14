@@ -7,6 +7,7 @@ All environment variables are validated and typed.
 
 from functools import lru_cache
 from typing import List
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -76,7 +77,7 @@ class Settings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./data/injustice.db"
     
     # Authentication
-    backend_jwt_secret: str = ""  # Internal backend secret (renamed from SECRET_KEY)
+    backend_jwt_secret: str = Field(default="", alias="SECRET_KEY")  # Picks up SECRET_KEY from .env
     supabase_jwt_secret: str = ""  # Supabase project JWT secret
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30

@@ -16,16 +16,17 @@ def test_authenticated_chat():
     reg_res = requests.post(f"{BASE_URL}/auth/register", json={
         "email": email,
         "password": password,
-        "full_name": "Repro Tester"
+        "full_name": "Repro Tester",
+        "accept_terms": True
     })
     
-    if reg_res.status_code != 200:
+    if reg_res.status_code not in [200, 201]:
         print(f"❌ Registration failed: {reg_res.status_code} - {reg_res.text}")
         return
 
     print("   Logging in...")
-    login_res = requests.post(f"{BASE_URL}/auth/login", data={
-        "username": email,
+    login_res = requests.post(f"{BASE_URL}/auth/login", json={
+        "email": email,
         "password": password
     })
     

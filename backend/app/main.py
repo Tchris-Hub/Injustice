@@ -238,10 +238,17 @@ async def check_env():
     """
     Enhanced diagnostic endpoint to check environment health.
     """
+    # SECURITY: Disable in production or when not in debug mode
+    if settings.is_production or not settings.debug:
+        return JSONResponse(
+            status_code=status.HTTP_403_FORBIDDEN,
+            content={"detail": "Access restricted in production."}
+        )
+    
     import os
     
     # Check variables
-    status = {
+    status_map = {
         "OPENROUTER_API_KEY": "SET ✅" if os.getenv("OPENROUTER_API_KEY") else "MISSING ❌",
         "MODEL_NAME": os.getenv("MODEL_NAME", "NOT SET (Using Gemini Flash Default)"),
         "DATABASE_URL": "SET ✅" if os.getenv("DATABASE_URL") else "MISSING ❌",
@@ -250,16 +257,16 @@ async def check_env():
         "ENVIRONMENT": os.getenv("ENVIRONMENT", "NOT SET (defaults to development)"),
     }
     
-    health_score = sum(1 for v in status.values() if "SET ✅" in str(v))
+    health_score = sum(1 for v in status_map.values() if "SET ✅" in str(v))
     total_needed = 5 # Base keys
     
     return {
-        "summary": "CRITICAL CONFIGURATION MISSING!" if status["BACKEND_JWT_SECRET"] == "MISSING ❌ (SECURITY RISK)" else "Configuration looks good",
-        "variable_status": status,
+        "summary": "CRITICAL CONFIGURATION MISSING!" if status_map["BACKEND_JWT_SECRET"] == "MISSING ❌ (SECURITY RISK)" else "Configuration looks good",
+        "variable_status": status_map,
         "health_score": f"{health_score}/{total_needed}",
         "advice": [
-            "Add BACKEND_JWT_SECRET to Railway variables if it shows MISSING." if "MISSING" in status["BACKEND_JWT_SECRET"] else None,
-            "Ensure MODEL_NAME is a valid OpenRouter slug (e.g. google/gemini-2.0-flash-exp:free)." if "NOT SET" in status["MODEL_NAME"] else None
+            "Add BACKEND_JWT_SECRET to Railway variables if it shows MISSING." if "MISSING" in status_map["BACKEND_JWT_SECRET"] else None,
+            "Ensure MODEL_NAME is a valid OpenRouter slug (e.g. google/gemini-2.0-flash-exp:free)." if "NOT SET" in status_map["MODEL_NAME"] else None
         ],
         "is_production": settings.is_production
     }

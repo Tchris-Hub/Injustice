@@ -20,6 +20,15 @@ def get_cipher_suite():
     key = base64.urlsafe_b64encode(kdf.derive(password))
     return Fernet(key)
 
+_cipher_suite = None
+
+def _get_fernet():
+    """Singleton getter for the cipher suite."""
+    global _cipher_suite
+    if _cipher_suite is None:
+        _cipher_suite = get_cipher_suite()
+    return _cipher_suite
+
 def encrypt_text(text: str) -> str:
     """Encrypt plaintext string."""
     if not text:
