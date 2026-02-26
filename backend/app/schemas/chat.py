@@ -239,6 +239,16 @@ class AnalysisResult(BaseModel):
     action_step: str
 
 
+class AuthenticityMarkers(BaseModel):
+    """Result of stamp/seal authenticity check on a document image."""
+    has_stamp: bool = False
+    has_signature: bool = False
+    verdict: str = "Unknown"       # "Likely Authentic", "Suspicious", "No Stamp Found"
+    confidence: str = "Low"        # "High", "Medium", "Low"
+    details: str = ""
+    red_flags: List[str] = []
+
+
 class DocumentAnalysisResponse(BaseModel):
     """Response from analysis with EI and legal principles."""
     document_type: str = "General Legal Document"
@@ -247,6 +257,7 @@ class DocumentAnalysisResponse(BaseModel):
     risk_score: int = Field(..., ge=0, le=10)
     analysis_results: List[AnalysisResult] = []
     overall_verdict: str
+    authenticity_markers: Optional[AuthenticityMarkers] = None
     disclaimer: str = (
         "⚠️ This analysis is for informational purposes only. "
         "Have a lawyer review any document before signing."

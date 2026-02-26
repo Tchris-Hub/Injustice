@@ -17,6 +17,10 @@ from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
 import openai
+try:
+    import whisper
+except ImportError:
+    whisper = None
 
 from app.db.session import get_db
 from app.db.models import (
@@ -1062,7 +1066,7 @@ async def transcribe_audio_public(
         )
     
     try:
-        # Save to temporary file (Whisper API requires a file)
+        # Save to temporary file (Whisper API/local requires a file)
         suffix = os.path.splitext(filename)[1] if filename else ".m4a"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
             content = await audio.read()
@@ -1070,18 +1074,34 @@ async def transcribe_audio_public(
             tmp_path = tmp.name
         
         try:
-            # Use OpenAI Whisper API
-            client = openai.OpenAI()
-            with open(tmp_path, "rb") as audio_file:
-                transcript = client.audio.transcriptions.create(
-                    model="whisper-1",
-                    file=audio_file,
-                    language="en"  # Can be made dynamic
-                )
+            # Check for OpenAI API Key
+            if os.getenv("OPENAI_API_KEY"):
+                # Use OpenAI Whisper API
+                client = openai.OpenAI()
+                with open(tmp_path, "rb") as audio_file:
+                    transcript = client.audio.transcriptions.create(
+                        model="whisper-1",
+                        file=audio_file,
+                        language="en"
+                    )
+                text = transcript.text
+            else:
+                # Fallback to local Whisper
+                if not whisper:
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail="Local Whisper is not installed and no OPENAI_API_KEY found."
+                    )
+                
+                logger.info("Using local Whisper for transcription...")
+                # Load model (tiny for speed during presentation)
+                model = whisper.load_model("tiny")
+                result = model.transcribe(tmp_path, language="en")
+                text = result["text"]
             
             return {
                 "success": True,
-                "text": transcript.text,
+                "text": text,
                 "language": "en"
             }
         finally:
@@ -1097,7 +1117,140 @@ async def transcribe_audio_public(
         )
     except Exception as e:
         logger.error(f"Transcription error: {e}", exc_info=True)
+        detail = "Failed to transcribe audio. Please try again."
+        if "ffmpeg" in str(e).lower():
+            detail = "FFmpeg is missing on the server. Please install FFmpeg for local audio support."
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to transcribe audio. Please try again."
+            detail=detail
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# STAMP / SEAL VERIFICATION (Totally Free – uses existing LLM vision)
+# ─────────────────────────────────────────────────────────────────────────────
+import base64
+from app.schemas.chat import AuthenticityMarkers
+
+@router.post("/public/verify-stamp", response_model=AuthenticityMarkers)
+async def verify_stamp(
+    image: UploadFile = File(...),
+):
+    """
+    FREE stamp/seal verification using AI vision.
+    Analyzes a document image for signs of authentic vs. forged stamps/seals.
+    Uses the existing LLM (Gemini via OpenRouter) — no extra cost or API key.
+    """
+    try:
+        content = await image.read()
+        b64_image = base64.b64encode(content).decode("utf-8")
+        mime_type = image.content_type or "image/jpeg"
+
+        from app.services.rag_service import get_rag_service
+        rag = await get_rag_service()
+
+        prompt = """You are a forensic document examiner AI assistant.
+Analyze this document image for stamps and seals.
+
+Respond ONLY with a valid JSON object (no markdown, no extra text) with these exact fields:
+{
+  "has_stamp": true or false,
+  "has_signature": true or false,
+  "verdict": "Likely Authentic" | "Suspicious" | "No Stamp Found",
+  "confidence": "High" | "Medium" | "Low",
+  "details": "A short paragraph describing what you see",
+  "red_flags": ["list", "of", "suspicious", "indicators"]
+}
+
+Indicators of AUTHENTIC stamps:
+- Clear, even ink distribution
+- Consistent circular or oval shape
+- Readable text around the perimeter
+- Official logo or emblem in center
+- Registration numbers present
+- Ink bleed consistent with real rubber stamp
+
+Indicators of SUSPICIOUS/FORGED stamps:
+- Pixelated or blurry edges (digital insertion)
+- Perfectly uniform ink (no pressure variation)
+- Misaligned text or logo
+- Missing official registration numbers
+- Colors inconsistent with typical official ink (blue/red/black)
+- No ink bleed or compression marks
+- Floating above the document (no indentation)
+- Helvetica or digital fonts instead of typical rubber-stamp fonts
+"""
+
+        # Use OpenRouter / Gemini multimodal if available
+        openrouter_key = os.getenv("OPENROUTER_API_KEY")
+        if not openrouter_key:
+            # Fallback: text-only heuristic analysis (no vision)
+            return AuthenticityMarkers(
+                has_stamp=False,
+                has_signature=False,
+                verdict="Unknown",
+                confidence="Low",
+                details="Vision analysis unavailable. Please ensure OPENROUTER_API_KEY is configured.",
+                red_flags=["API key not configured — manual review required"]
+            )
+
+        import httpx, json as _json
+
+        payload = {
+            "model": "google/gemini-flash-1.5",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": f"data:{mime_type};base64,{b64_image}"}
+                        },
+                        {"type": "text", "text": prompt}
+                    ]
+                }
+            ],
+            "max_tokens": 500,
+            "temperature": 0.1,
+        }
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                "https://openrouter.ai/api/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {openrouter_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload
+            )
+            response.raise_for_status()
+
+        raw = response.json()["choices"][0]["message"]["content"].strip()
+
+        # Strip markdown code fences if model wrapped output
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        data = _json.loads(raw)
+        return AuthenticityMarkers(
+            has_stamp=data.get("has_stamp", False),
+            has_signature=data.get("has_signature", False),
+            verdict=data.get("verdict", "Unknown"),
+            confidence=data.get("confidence", "Low"),
+            details=data.get("details", ""),
+            red_flags=data.get("red_flags", [])
+        )
+
+    except Exception as e:
+        logger.error(f"Stamp verification error: {e}", exc_info=True)
+        return AuthenticityMarkers(
+            has_stamp=False,
+            has_signature=False,
+            verdict="Unknown",
+            confidence="Low",
+            details="Verification failed. Please try again with a clearer image.",
+            red_flags=["Analysis could not be completed"]
         )

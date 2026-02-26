@@ -19,15 +19,17 @@ logger = logging.getLogger(__name__)
 
 # Supabase JWKS endpoint for ES256 token verification
 # This is the public key endpoint that allows us to verify Supabase-issued JWTs
-SUPABASE_PROJECT_REF = "fdjltnfkmskeqtiaqlou"
-SUPABASE_JWKS_URL = f"https://{SUPABASE_PROJECT_REF}.supabase.co/auth/v1/.well-known/jwks.json"
+def get_supabase_jwks_url() -> str:
+    """Construct the Supabase JWKS endpoint URL."""
+    return f"https://{settings.supabase_project_ref}.supabase.co/auth/v1/.well-known/jwks.json"
+
 _jwks_client: Optional[PyJWKClient] = None
 
 def get_jwks_client() -> PyJWKClient:
     """Get or create a cached JWKS client for Supabase token verification."""
     global _jwks_client
     if _jwks_client is None:
-        _jwks_client = PyJWKClient(SUPABASE_JWKS_URL, cache_keys=True)
+        _jwks_client = PyJWKClient(get_supabase_jwks_url(), cache_keys=True)
     return _jwks_client
 
 
@@ -186,7 +188,7 @@ def decode_token(token: str) -> Optional[TokenData]:
         TokenData if valid, None if invalid/expired
     """
     try:
-        # 1. Try decoding with our BACKEND_JWT_SECRET
+        # 1. Try decoding with our BACKEND_JWT_SECRET (HS256)
         payload = jwt.decode(
             token,
             settings.backend_jwt_secret,
@@ -205,22 +207,21 @@ def decode_token(token: str) -> Optional[TokenData]:
         # 2. Bridge: Try decoding with Supabase JWKS (ES256)
         # Supabase uses ES256 asymmetric signing — we verify using the public key
         # fetched from their JWKS endpoint.
-        logger.debug(f"Backend JWT decode failed: {type(backend_err).__name__}: {backend_err}")
+        logger.debug(f"Backend JWT decode failed ({type(backend_err).__name__}). Trying Supabase Bridge...")
 
         try:
+            # SUPABASE BRIDGE: ES256 asymmetric signature verification using JWKS
             jwks_client = get_jwks_client()
             signing_key = jwks_client.get_signing_key_from_jwt(token)
             
-            # SUPABASE BRIDGE: ES256 asymmetric signature verification
-            # We verify that Supabase signed this token. 
-            # We are lenient with audience/issuer for the bridge to support different OAuth providers.
+            # Enforce the 'authenticated' audience for better security.
             payload = jwt.decode(
                 token,
                 signing_key.key,
                 algorithms=["ES256"],
+                audience="authenticated",
                 options={
-                    "verify_aud": False,  # Lenient audience check - signature is the real proof
-                    "verify_iss": False   # Lenient issuer check
+                    "verify_iss": False   # Lenient issuer check to support custom domains/proxies
                 }
             )
             

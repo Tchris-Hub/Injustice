@@ -22,10 +22,48 @@ from sqlalchemy import (
     Float,
     Enum as SQLEnum
 )
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.types import TypeDecorator, CHAR
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
+
+
+# ---------------------------------------------
+# GUID Type for Cross-Database Compatibility
+# ---------------------------------------------
+class GUID(TypeDecorator):
+    """
+    Platform-independent GUID type.
+    Uses PostgreSQL's UUID type, otherwise uses CHAR(32), storing as string without hyphens.
+    """
+    impl = CHAR
+    cache_ok = True
+
+    def load_dialect_impl(self, dialect):
+        if dialect.name == "postgresql":
+            return dialect.type_descriptor(PG_UUID(as_uuid=True))
+        else:
+            return dialect.type_descriptor(CHAR(32))
+
+    def process_bind_param(self, value, dialect):
+        if value is None:
+            return value
+        elif dialect.name == "postgresql":
+            return str(value)
+        else:
+            if not isinstance(value, uuid.UUID):
+                return "%.32x" % uuid.UUID(value).int
+            else:
+                return "%.32x" % value.int
+
+    def process_result_value(self, value, dialect):
+        if value is None:
+            return value
+        else:
+            if not isinstance(value, uuid.UUID):
+                return uuid.UUID(value)
+            return value
 
 
 # ---------------------------------------------
@@ -52,7 +90,7 @@ class User(Base):
     __tablename__ = "users"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -137,12 +175,12 @@ class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -188,12 +226,12 @@ class Conversation(Base):
     __tablename__ = "conversations"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -274,12 +312,12 @@ class Message(Base):
     __tablename__ = "messages"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -357,18 +395,18 @@ class EscalationCase(Base):
     __tablename__ = "escalation_cases"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("conversations.id", ondelete="CASCADE"),
         nullable=False,
         unique=True
     )
     created_by_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True
     )
@@ -456,12 +494,12 @@ class UserProfile(Base):
     __tablename__ = "user_profiles"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         unique=True,
         nullable=False
@@ -479,12 +517,12 @@ class UserPreference(Base):
     __tablename__ = "user_preferences"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         unique=True,
         nullable=False
@@ -505,18 +543,18 @@ class ChatArchive(Base):
     __tablename__ = "chat_archives"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True
     )
     conversation_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         nullable=False
     )
     transcript_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
@@ -536,12 +574,12 @@ class DocumentAnalysisRequest(Base):
     __tablename__ = "document_analysis_requests"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True
     )
@@ -560,12 +598,12 @@ class DocumentAnalysisResult(Base):
     __tablename__ = "document_analysis_results"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     request_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("document_analysis_requests.id", ondelete="CASCADE"),
         nullable=False
     )
@@ -579,12 +617,12 @@ class DocumentGenerationRequest(Base):
     __tablename__ = "document_generation_requests"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="SET NULL"),
         nullable=True
     )
@@ -602,12 +640,12 @@ class GeneratedDocument(Base):
     __tablename__ = "generated_documents"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     request_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("document_generation_requests.id", ondelete="CASCADE"),
         nullable=False
     )
@@ -627,7 +665,7 @@ class LegalDocument(Base):
     __tablename__ = "legal_documents"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -702,7 +740,7 @@ class LegalTemplate(Base):
     __tablename__ = "legal_templates"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -718,7 +756,7 @@ class LawyerDirectory(Base):
     __tablename__ = "lawyer_directory"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -735,7 +773,7 @@ class ConstitutionSection(Base):
     __tablename__ = "constitution_sections"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -751,7 +789,7 @@ class LegalAidLocation(Base):
     __tablename__ = "legal_aid_locations"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -773,7 +811,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
     
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
@@ -794,7 +832,7 @@ class AuditLog(Base):
     
     # Actor
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         nullable=True
     )
     ip_address: Mapped[Optional[str]] = mapped_column(
@@ -837,12 +875,12 @@ class Notification(Base):
     __tablename__ = "notifications"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True
@@ -862,12 +900,12 @@ class DataRetentionEvent(Base):
     __tablename__ = "data_retention_events"
 
     id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         primary_key=True,
         default=generate_uuid
     )
     user_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True),
+        GUID,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True

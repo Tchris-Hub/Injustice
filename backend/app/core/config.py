@@ -78,7 +78,8 @@ class Settings(BaseSettings):
     
     # Authentication
     backend_jwt_secret: str = Field(default="", alias="SECRET_KEY")  # Picks up SECRET_KEY from .env
-    supabase_jwt_secret: str = ""  # Supabase project JWT secret
+    supabase_jwt_secret: str = ""  # OPTIONAL/LEGACY: No longer required for JWKS
+    supabase_project_ref: str = "fdjltnfkmskeqtiaqlou"  # REQUIRED for JWKS verification
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
