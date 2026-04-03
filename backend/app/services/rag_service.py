@@ -20,8 +20,21 @@ from langchain_core.messages import HumanMessage, SystemMessage
 import openai
 
 from app.core.config import settings
+from app.services.search_service import SearchService
+from app.services.news_service import NewsService
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, or_, text
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+# Search optimized query prompt
+SEARCH_QUERY_PROMPT = """Given the user's message and history, generate a concise, factual search query to find the most relevant and LATEST legal information, news, or court rulings in Nigeria. 
+Only output the query string. No chatter.
+
+User Message: {user_message}
+History: {history}
+"""
 
 
 # ---------------------------------------------
@@ -169,6 +182,10 @@ class RAGService:
         
         logger.info(f"Initializing RAG Service...")
         
+        # Step 0: Initialize Search & News Services
+        self.search_service = SearchService()
+        self.news_service = NewsService()
+        
         # Step 1: Initialize local embeddings (FastEmbed - BAAI/bge-small-en-v1.5)
         try:
             logger.info(f"Step 1/4: Initializing Local Embeddings (FastEmbed)...")
@@ -310,22 +327,58 @@ class RAGService:
                     continue
                     
                 return response
+        raise last_error
+
+    async def _ainvoke_with_fallback(self, messages: List[Any]) -> Any:
+        """
+        Async version of _invoke_with_fallback.
+        """
+        last_error = None
+        current_model = getattr(self.llm, "model_name", getattr(self.llm, "model", "default-model"))
+        models_to_try = list(dict.fromkeys([current_model] + settings.MODEL_FALLBACKS))
+        
+        for model_name in models_to_try:
+            try:
+                if hasattr(self.llm, "model_name"): self.llm.model_name = model_name
+                if hasattr(self.llm, "model"): self.llm.model = model_name
+                
+                logger.info(f"Attempting Async LLM call with model: {model_name}")
+                response = await self.llm.ainvoke(messages)
+                if not response or not response.content or not response.content.strip():
+                    continue
+                return response
             except Exception as e:
                 last_error = e
-                error_str = str(e).lower()
-                
-                # If it's a rate limit, overloaded, OR 404, definitely try another model
-                if any(x in error_str for x in ["429", "rate limit", "overloaded", "busy", "limit exceeded", "insufficient_quota", "404", "not found"]):
-                    logger.warning(f"⚠️ Model {model_name} is unavailable or not found ({error_str}). Trying next fallback...")
-                    continue
-                else:
-                    # For other errors, log and try one more just in case it's model-specific
-                    logger.error(f"❌ Model {model_name} failed with error: {e}")
-                    continue
-        
-        # If we get here, all models failed
-        logger.error(f"🛑 All {len(models_to_try)} LLM models failed to respond.")
+                logger.error(f"❌ Model {model_name} failed (Async): {e}")
+                continue
         raise last_error
+
+    async def _astream_with_fallback(self, messages: List[Any]):
+        """Async generator for LLM streaming with fallback support."""
+        models_to_try = [settings.MODEL_CONFIG["default"]] + settings.MODEL_FALLBACKS
+        # Remove duplicates while preserving order
+        models_to_try = list(dict.fromkeys(models_to_try))
+        
+        last_error = None
+        for model_name in models_to_try:
+            try:
+                if hasattr(self.llm, "model_name"):
+                    self.llm.model_name = model_name
+                if hasattr(self.llm, "model"):
+                    self.llm.model = model_name
+                
+                logger.info(f"Attempting Streaming LLM call with model: {model_name}")
+                async for chunk in self.llm.astream(messages):
+                    if chunk.content:
+                        yield chunk.content
+                return # Success, exit model loop
+            except Exception as e:
+                last_error = e
+                logger.warning(f"⚠️ Streaming failed for {model_name}: {e}. Trying fallback...")
+                continue
+        
+        if last_error:
+            yield f"\n\n[Error]: {str(last_error)}"
     def ingest_document(
         self,
         content: str,
@@ -373,48 +426,103 @@ class RAGService:
         logger.info(f"Ingested '{title}': {len(chunks)} chunks created")
         return len(chunks)
 
-    
-    def retrieve_relevant_chunks(
+    async def _query_supabase_constitution(
+        self,
+        query_text: str,
+        db: AsyncSession,
+        limit: int = 3
+    ) -> List[Document]:
+        """
+        Query the 'constitution_sections' table in Supabase.
+        Uses basic keyword/text matching on section_title and content.
+        """
+        try:
+            # We use a simple ILIKE search for robustness across Postgres versions
+            # If pg_trgm is enabled, we could use word_similarity
+            sql_query = text("""
+                SELECT chapter_id, section_number, section_title, content, key_takeaway
+                FROM constitution_sections
+                WHERE content ILIKE :query OR section_title ILIKE :query
+                LIMIT :limit
+            """)
+            
+            result = await db.execute(sql_query, {"query": f"%{query_text}%", "limit": limit})
+            rows = result.all()
+            
+            docs = []
+            for row in rows:
+                content = f"### Section {row.section_number}: {row.section_title}\n\n{row.content}"
+                if row.key_takeaway:
+                    content += f"\n\n**Key Takeaway**: {row.key_takeaway}"
+                    
+                docs.append(Document(
+                    page_content=content,
+                    metadata={
+                        "title": "Constitution of Nigeria (1999)",
+                        "section": row.section_number,
+                        "chapter": row.chapter_id,
+                        "document_type": "constitution",
+                        "source_db": "supabase"
+                    }
+                ))
+            return docs
+        except Exception as e:
+            logger.error(f"Supabase constitution query failed: {e}")
+            return []
+
+    async def retrieve_relevant_chunks(
         self,
         query: str,
+        db: Optional[AsyncSession] = None,
         k: int = None
     ) -> List[Tuple[Document, float]]:
         """
-        Retrieve relevant document chunks for a query.
-        
-        Args:
-            query: User's question
-            k: Number of chunks to retrieve
-            
-        Returns:
-            List of (Document, similarity_score) tuples
+        Retrieve relevant document chunks for a query using Hybrid Retrieval.
+        1. Vector Search (ChromaDB)
+        2. SQL Search (Supabase Constitution) - if db provided
         """
         k = k or settings.rag_top_k
+        results = []
         
+        # 1. Vector Search (Always)
         try:
+            # chroma.similarity_search_with_score is sync, but we wrap it in threadpool or just use it
+            # since it's local disk I/O mostly.
             results = self.vector_store.similarity_search_with_score(
                 query,
                 k=k
             )
         except Exception as e:
-            logger.error(f"Search failed: {e}")
-            raise e
+            logger.error(f"Vector search failed: {e}")
         
-        logger.debug(f"Retrieved {len(results)} chunks for query: '{query[:50]}...'")
-        return results
+        # 2. Supabase Search (If DB available)
+        if db:
+            supabase_docs = await self._query_supabase_constitution(query, db)
+            # Add to results with artificial "medium" distance since score isn't comparable
+            for doc in supabase_docs:
+                results.append((doc, 0.3)) # Lower distance = higher priority
+        
+        # Sort and limit
+        results.sort(key=lambda x: x[1])
+        return results[:k]
     
-    def assess_risk(self, message: str) -> dict:
+    async def _generate_search_query(self, user_message: str, history: str = "") -> str:
+        """Generate a search query optimized for SearxNG."""
+        try:
+            response = await self._ainvoke_with_fallback([
+                SystemMessage(content="You are a search query optimizer. Output ONLY the query string."),
+                HumanMessage(content=SEARCH_QUERY_PROMPT.format(user_message=user_message, history=history))
+            ])
+            return response.content.strip().strip('"')
+        except:
+            return user_message
+
+    async def assess_risk(self, message: str) -> dict:
         """
-        Assess the risk level and topic of a user message.
-        
-        Args:
-            message: User's message
-            
-        Returns:
-            Dict with risk_level, legal_topic, escalation_needed, escalation_reason
+        Assess the risk level and topic of a user message (Async).
         """
         try:
-            response = self._invoke_with_fallback([
+            response = await self._ainvoke_with_fallback([
                 SystemMessage(content="You are a risk assessment system. Respond only with valid JSON."),
                 HumanMessage(content=RISK_ASSESSMENT_PROMPT.format(message=message))
             ])
@@ -426,35 +534,46 @@ class RAGService:
             return {
                 "risk_level": "medium",
                 "legal_topic": "general_info",
-                "escalation_needed": False,
                 "escalation_reason": None
             }
     
-    def generate_response(
+    async def generate_response(
         self,
         user_message: str,
         conversation_history: List[dict] = None,
-        retrieved_chunks: List[Tuple[Document, float]] = None
+        db: Optional[AsyncSession] = None
     ) -> dict:
-        """
-        Generate an AI response using RAG.
+        """Generate an AI response using Async RAG + Live Layer."""
         
-        Args:
-            user_message: The user's question
-            conversation_history: Previous messages in the conversation
-            retrieved_chunks: Pre-retrieved chunks (if None, will retrieve)
-            
-        Returns:
-            Dict with response content, sources, and metadata
-        """
-        # Retrieve relevant chunks if not provided
-        if retrieved_chunks is None:
-            retrieved_chunks = self.retrieve_relevant_chunks(user_message)
+        # 1. Hybrid Retrieval (Chroma + Supabase)
+        retrieved_chunks = await self.retrieve_relevant_chunks(user_message, db=db)
         
+        # 2. Live Layer (Search + News)
+        web_context = ""
+        web_results_raw = []
+        news_context = ""
+        news_items = []
+
+        if settings.ENABLE_LIVE_SEARCH:
+            # Pulse 1: Real-time search
+            search_query = await self._generate_search_query(
+                user_message, 
+                str(conversation_history[-1:]) if conversation_history else ""
+            )
+            web_results_raw = await self.search_service.search(search_query)
+            if web_results_raw:
+                web_context = self.search_service.format_results_for_prompt(web_results_raw)
+
+            # Pulse 2: Legal News RSS
+            news_items = await self.news_service.fetch_latest_news(limit=3)
+            if news_items:
+                news_context = self.news_service.format_news_for_prompt(news_items)
+
         # Build context from retrieved chunks
         context_parts = []
         sources = []
         
+        # Add Static Sources (Chroma/Supabase)
         for doc, score in retrieved_chunks:
             context_parts.append(
                 f"[Source: {doc.metadata.get('title', 'Unknown')} - "
@@ -465,55 +584,71 @@ class RAGService:
                 "section": doc.metadata.get("section"),
                 "excerpt": doc.page_content[:200] + "..." if len(doc.page_content) > 200 else doc.page_content,
                 "document_type": doc.metadata.get("document_type", "unknown"),
-                "relevance_score": round(1 - score, 2)  # Convert distance to similarity
+                "relevance_score": round(1 - score, 2)
             })
         
-        context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant legal documents found."
+        # Add Web & News Sources to citations
+        for res in web_results_raw:
+            sources.append({
+                "title": f"🌐 {res['title']}",
+                "section": "Web Result / News",
+                "excerpt": res['content'][:200] + "...",
+                "document_type": "web_search",
+                "relevance_score": 0.5,
+                "url": res['url']
+            })
+            
+        for item in news_items:
+            sources.append({
+                "title": f"🏮 {item['title']}",
+                "section": f"Legal Pulse ({item['source']})",
+                "excerpt": item['summary'],
+                "document_type": "legal_news",
+                "relevance_score": 0.4,
+                "url": item['url']
+            })
+        
+        static_context = "\n\n---\n\n".join(context_parts) if context_parts else "No relevant legal documents found."
+        
+        # Combine everything for prompt
+        final_context = f"## STATIONARY LEGAL CONTEXT (Constitution/Law):\n{static_context}\n\n{web_context}\n\n{news_context}"
         
         # Build messages for LLM
         messages = [SystemMessage(content=SYSTEM_PROMPT)]
         
-        # Add conversation history
         if conversation_history:
-            for msg in conversation_history[-6:]:  # Last 6 messages for context
+            for msg in conversation_history[-6:]:
                 if msg["role"] == "user":
                     messages.append(HumanMessage(content=msg["content"]))
                 else:
                     messages.append(SystemMessage(content=f"[Previous response]: {msg['content'][:500]}"))
         
-        # Add current query with context
-        user_prompt = f"""## Legal Context (from Nigerian law):
-{context}
+        user_prompt = f"""## Legal & Real-time Context:
+{final_context}
 
 ## User's Question:
 {user_message}
 
-Please provide a helpful, empathetic response based on the legal context above. Remember to:
-1. Acknowledge their situation first
-2. Cite specific sections when referencing laws
-3. Provide practical next steps
-4. Recommend professional help if appropriate"""
+Please provide a helpful, empathetic response based on the context above.
+If the information comes from the web (SearxNG), label it as 'Recent information' or 'Current news'.
+ALWAYS prioritize the Constitution if there's a conflict between static law and web news."""
         
         messages.append(HumanMessage(content=user_prompt))
         
         # Generate response
         try:
-            response = self._invoke_with_fallback(messages)
+            response = await self._ainvoke_with_fallback(messages)
             
-            # Determine confidence based on source relevance
             avg_relevance = sum(s["relevance_score"] for s in sources) / len(sources) if sources else 0
-            if avg_relevance > 0.7:
+            if avg_relevance > 0.6:
                 confidence = "high"
-            elif avg_relevance > 0.4:
+            elif avg_relevance > 0.3:
                 confidence = "medium"
             else:
                 confidence = "low"
             
-            # Append Disclaimer
-            final_content = response.content + LEGAL_DISCLAIMER_TEXT
-            
             return {
-                "content": final_content,
+                "content": response.content + LEGAL_DISCLAIMER_TEXT,
                 "sources": sources,
                 "confidence_score": confidence,
                 "model_version": settings.MODEL_CONFIG["default"]
@@ -522,17 +657,50 @@ Please provide a helpful, empathetic response based on the legal context above. 
         except Exception as e:
             logger.error(f"Response generation failed: {e}")
             return {
-                "content": (
-                    "I apologize, but I'm having trouble processing your question right now. "
-                    "This could be a temporary issue. Please try again in a moment, or if this "
-                    "is urgent, please contact a local legal aid organization directly."
-                ),
+                "content": f"I apologize, but I encountered an error: {str(e)}",
                 "sources": [],
-                "confidence_score": "low",
-                "model_version": settings.MODEL_CONFIG["default"],
-                "error": str(e)
+                "confidence_score": "low"
             }
-    
+
+    async def stream_response(
+        self,
+        user_message: str,
+        conversation_history: List[dict] = None,
+        db: Optional[AsyncSession] = None
+    ):
+        """Async generator for streaming RAG response with Live Layer."""
+        # 1. Retrieve & Search
+        retrieved_results = await self.retrieve_relevant_chunks(user_message, db=db)
+        static_context = "\n\n".join([doc.page_content for doc, _ in retrieved_results])
+        
+        web_context = ""
+        if settings.ENABLE_LIVE_SEARCH:
+            search_query = await self._generate_search_query(user_message)
+            web_results = await self.search_service.search(search_query)
+            if web_results:
+                web_context = self.search_service.format_results_for_prompt(web_results)
+        
+        messages = [
+            SystemMessage(content=SYSTEM_PROMPT),
+        ]
+        
+        if conversation_history:
+            for msg in conversation_history[-6:]:
+                if msg["role"] == "user":
+                    messages.append(HumanMessage(content=msg["content"]))
+                else:
+                    messages.append(SystemMessage(content=msg["content"]))
+        
+        prompt = f"Context from Legal Docs:\n{static_context}\n\n{web_context}\n\nUser Question: {user_message}"
+        messages.append(HumanMessage(content=prompt))
+        
+        async for content in self._astream_with_fallback(messages):
+            if content:
+                yield content
+        
+        yield "\n\n" + LEGAL_DISCLAIMER_TEXT
+"\n\n" + LEGAL_DISCLAIMER_TEXT
+
     def analyze_document(self, document_text: str) -> dict:
         """
         Analyze a legal document for dangerous clauses.
@@ -776,19 +944,12 @@ Please provide a helpful, empathetic response based on the legal context above. 
         logger.error(f"All OCR models failed: {last_error}")
         raise Exception(error_msg)
 
-    def generate_document(self, doc_type: str, user_details: str) -> str:
+    async def generate_document(self, doc_type: str, user_details: str) -> str:
         """
-        Generate a legal document template.
-        
-        Args:
-            doc_type: Type of document (e.g., "Demand Letter")
-            user_details: Specific details to include
-            
-        Returns:
-            String containing the document text
+        Generate a legal document template (Async).
         """
         try:
-            response = self.llm.invoke([
+            response = await self._ainvoke_with_fallback([
                 SystemMessage(content="You are a professional legal document generator."),
                 HumanMessage(content=DOCUMENT_GENERATION_PROMPT.format(
                     user_request=doc_type,

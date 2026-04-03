@@ -60,6 +60,11 @@ class Settings(BaseSettings):
             "generation": self.MODEL_GENERATION or self.MODEL_NAME,
         }
     
+    # Live Search (SearxNG)
+    SEARXNG_URL: str = "https://searx.be"
+    ENABLE_LIVE_SEARCH: bool = True
+    SEARCH_TOP_K: int = 3
+    
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

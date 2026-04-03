@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from typing import List, Optional, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query, File, UploadFile, Form, Header, Request, BackgroundTasks
+from fastapi.responses import StreamingResponse
 from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, desc
@@ -322,6 +323,53 @@ async def send_message(
             escalation_recommended=False,
             disclaimer=LEGAL_DISCLAIMER
         )
+
+
+@router.post("/message/stream")
+async def send_message_stream(
+    request: Request,
+    data: MessageCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """
+    Stream an AI response using Server-Sent Events (SSE).
+    """
+    rag_service = get_rag_service()
+    
+    # 1. Get history for context
+    history = []
+    if data.conversation_id:
+        try:
+            conv_uuid = uuid.UUID(data.conversation_id)
+            history_result = await db.execute(
+                select(Message)
+                .where(Message.conversation_id == conv_uuid)
+                .order_by(Message.created_at.desc())
+                .limit(10)
+            )
+            history = [
+                {"role": msg.role, "content": decrypt_text(msg.content)}
+                for msg in reversed(history_result.scalars().all())
+            ]
+        except Exception:
+            pass
+
+    async def event_generator():
+        try:
+            async for chunk in rag_service.stream_response(
+                user_message=data.content,
+                conversation_history=history
+            ):
+                if await request.is_disconnected():
+                    break
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Streaming error: {e}")
+            yield f"data: [ERROR] {str(e)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 # ---------------------------------------------
@@ -715,6 +763,44 @@ async def send_message_public(
             sources=[],
             confidence_score="0.0"
         )
+
+
+@router.post("/public/message/stream")
+@limiter.limit("5/minute")
+async def send_message_public_stream(
+    request: Request,
+    data: PublicChatRequest,
+    background_tasks: BackgroundTasks
+):
+    """
+    Stream a public AI response using Server-Sent Events (SSE).
+    """
+    rag_service = get_rag_service()
+    
+    # Trigger background audit
+    background_tasks.add_task(
+        audit_service.audit_query,
+        query=data.message,
+        user_id=None,
+        ip_address=request.client.host if request.client else None,
+        user_agent=request.headers.get("user-agent")
+    )
+
+    async def event_generator():
+        try:
+            async for chunk in rag_service.stream_response(
+                user_message=data.message,
+                conversation_history=[]
+            ):
+                if await request.is_disconnected():
+                    break
+                yield f"data: {chunk}\n\n"
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            logger.error(f"Public streaming error: {e}")
+            yield f"data: [ERROR] {str(e)}\n\n"
+
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 
 @router.post(
